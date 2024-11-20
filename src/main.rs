@@ -2,11 +2,14 @@
 #![no_main]
 #![feature(abi_avr_interrupt)]
 
+use core::cell::RefCell;
+
 use arduino_hal::hal::port::Dynamic;
 use arduino_hal::port::mode::{Floating, Input};
 use arduino_hal::port::Pin;
 use arduino_hal::prelude::*;
 use arduino_hal::adc::channel;
+use avr_device::interrupt;
 
 pub struct Wheel {
     pub counter: u32,
@@ -22,13 +25,56 @@ impl Device {
 }
 
 static mut LEFT_COUNTER: i32 = 0;
+static mut RIGHT_COUNTER: i32 = 0;
+static DEVICE: interrupt::Mutex<RefCell<Option<Device>>> = interrupt::Mutex::new(RefCell::new(None));
+
+type Console = arduino_hal::hal::usart::Usart0<arduino_hal::DefaultClock>;
+static CONSOLE: interrupt::Mutex<RefCell<Option<Console>>> =
+    interrupt::Mutex::new(RefCell::new(None));
+
+macro_rules! print {
+    ($($t:tt)*) => {
+        interrupt::free(
+            |cs| {
+                if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
+                    let _ = ufmt::uwrite!(console, $($t)*);
+                }
+            },
+        )
+    };
+}
+
+macro_rules! println {
+    ($($t:tt)*) => {
+        interrupt::free(
+            |cs| {
+                if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
+                    let _ = ufmt::uwriteln!(console, $($t)*);
+                }
+            },
+        )
+    };
+}
+
+fn put_console(console: Console) {
+    interrupt::free(|cs| {
+        *CONSOLE.borrow(cs).borrow_mut() = Some(console);
+    })
+}
+
+#[avr_device::interrupt(atmega328p)]
+fn INT0() {
+    unsafe {
+        LEFT_COUNTER += 1;
+    }
+}
+
 
 //This function is called on change of pin 2
 #[avr_device::interrupt(atmega328p)]
-#[allow(non_snake_case)]
 fn PCINT2() {
     unsafe {
-        LEFT_COUNTER += 1;
+        RIGHT_COUNTER += 1;
     }
 }
 
@@ -37,12 +83,22 @@ fn main() -> ! {
     let dp = arduino_hal::Peripherals::take().unwrap();
     let pins = arduino_hal::pins!(dp);
 
-    // Enable the PCINT2 pin change interrupt
-    dp.EXINT.pcicr.write(|w| unsafe { w.bits(0b100) });
-    // Enable pin change interrupts on PCINT18 which is pin PD2 (= d2)
-    dp.EXINT.pcmsk2.write(|w| w.bits(0b100));
+    // Enable interrupt for the left wheel counter
+    // We can only use port level pin-change interrupt PCINT2
+    // If we use it for multiple pins on a port we'd not be able to
+    // know which pin triggered it
+    dp.EXINT.pcicr.write(|w| w.pcie().bits(0b100) );
+    // Enable pin change interrupts on PCINT20 which is pin PD4 (= d4)
+    dp.EXINT.pcmsk2.write(|w| w.pcint().bits(0b10000));
 
-    let mut serial = arduino_hal::default_serial!(dp, pins, 57600);
+    // Enable interrupt for the right wheel encoder
+    // We can use normal external interrupt INT0
+    dp.EXINT.eicra.modify(|_, w| w.isc0().bits(0x01));
+    dp.EXINT.eimsk.modify(|_, w| w.int0().set_bit());
+
+
+    let serial = arduino_hal::default_serial!(dp, pins, 57600);
+    put_console(serial);
 
     let mut led = pins.d13.into_output();
 
@@ -55,7 +111,6 @@ fn main() -> ! {
     let a3 = pins.a3.into_analog_input(&mut adc);
     let a4 = pins.a4.into_analog_input(&mut adc);
     let a5 = pins.a5.into_analog_input(&mut adc);
-
 
     // d0 and d1 are RX and TX
     let d2 = pins.d2.into_floating_input().downgrade();
@@ -70,15 +125,16 @@ fn main() -> ! {
     let d11 = pins.d11.into_floating_input();
     let d12 = pins.d12.into_floating_input();
 
-    let device = Device{
-        left_wheel : Wheel{counter : 0, counter_pin : d2},
-        right_wheel : Wheel{counter: 0, counter_pin : d4},
-    };
-
+    interrupt::free(|cs| {
+        *DEVICE.borrow(cs).borrow_mut() = Some(Device{
+            left_wheel : Wheel{counter : 0, counter_pin : d2},
+            right_wheel : Wheel{counter: 0, counter_pin : d4},
+        });
+    });
     unsafe { avr_device::interrupt::enable() };
 
     loop {
-        ufmt::uwriteln!(&mut serial, "" ).unwrap_infallible();
+        println!("" );
         let values = [
             a0.analog_read(&mut adc),
             a1.analog_read(&mut adc),
@@ -89,29 +145,34 @@ fn main() -> ! {
         ];
 
         for (i, v) in values.iter().enumerate() {
-            ufmt::uwrite!(&mut serial, "A{}: {}\t", i, v).unwrap_infallible();
+            print!("A{}: {}\t", i, v);
         }
-        ufmt::uwriteln!(&mut serial, "" ).unwrap_infallible();
+        println!("" );
 
 
-        let dvalues = [
-            device.left_wheel.counter_pin.is_high(),
-            d3.is_high(),
-            device.right_wheel.counter_pin.is_high(),
-            d5.is_high(),
-            d6.is_high(),
-            d7.is_high(),
-            d8.is_high(),
-            d9.is_high(),
-            d10.is_high(),
-            d11.is_high(),
-            d12.is_high(),
-        ];
+        let dvalues = interrupt::free(|cs| {
+            let dev_binding = DEVICE.borrow(cs).borrow();
+            let &dev = &dev_binding.as_ref().unwrap();
+
+            [
+                dev.left_wheel.counter_pin.is_high(),
+                d3.is_high(),
+                dev.right_wheel.counter_pin.is_high(),
+                d5.is_high(),
+                d6.is_high(),
+                d7.is_high(),
+                d8.is_high(),
+                d9.is_high(),
+                d10.is_high(),
+                d11.is_high(),
+                d12.is_high(),
+            ]
+        });
 
         for (i, v) in dvalues.iter().enumerate() {
-            ufmt::uwrite!(&mut serial, "D{}: {}\t", i+2, v).unwrap_infallible();
+            print!("D{}: {}\t", i+2, v);
         }
-        ufmt::uwriteln!(&mut serial, "" ).unwrap_infallible();
+        println!("");
 
         let (vbg, gnd, tmp, adc6, adc7) = (
             adc.read_blocking(&channel::Vbg),
@@ -120,14 +181,14 @@ fn main() -> ! {
             adc.read_blocking(&channel::ADC6),
             adc.read_blocking(&channel::ADC7),
         );
-        ufmt::uwriteln!(&mut serial, "ADC6: {}, ADC7: {}", adc6, adc7).unwrap_infallible();
+        println!("ADC6: {}, ADC7: {}", adc6, adc7);
 
 
-        ufmt::uwriteln!(&mut serial, "Vbandgap: {}", vbg).unwrap_infallible();
-        ufmt::uwriteln!(&mut serial, "Ground: {}", gnd).unwrap_infallible();
-        ufmt::uwriteln!(&mut serial, "Temperature: {}", tmp).unwrap_infallible();
+        println!("Vbandgap: {}", vbg);
+        println!("Ground: {}", gnd);
+        println!("Temperature: {}", tmp);
         unsafe {
-            ufmt::uwriteln!(&mut serial, "Left counter: {}", LEFT_COUNTER).unwrap_infallible();
+            println!("Counters left: {}, right: {}", LEFT_COUNTER, RIGHT_COUNTER);
         }
         led.set_low();
         arduino_hal::delay_ms(300);
@@ -153,8 +214,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // Print out panic location
     ufmt::uwriteln!(&mut serial, "Firmware panic!\r").unwrap_infallible();
     if let Some(loc) = info.location() {
-        ufmt::uwriteln!(
-            &mut serial,
+        ufmt::uwriteln!(&mut serial,
             "  At {}:{}:{}\r",
             loc.file(),
             loc.line(),
