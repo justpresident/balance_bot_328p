@@ -11,6 +11,8 @@ use arduino_hal::prelude::*;
 use arduino_hal::adc::channel;
 use avr_device::interrupt;
 
+mod console;
+
 pub struct Wheel {
     pub counter: u32,
     pub counter_pin: Pin<Input<Floating>, Dynamic>,
@@ -28,39 +30,6 @@ static mut LEFT_COUNTER: i32 = 0;
 static mut RIGHT_COUNTER: i32 = 0;
 static DEVICE: interrupt::Mutex<RefCell<Option<Device>>> = interrupt::Mutex::new(RefCell::new(None));
 
-type Console = arduino_hal::hal::usart::Usart0<arduino_hal::DefaultClock>;
-static CONSOLE: interrupt::Mutex<RefCell<Option<Console>>> =
-    interrupt::Mutex::new(RefCell::new(None));
-
-macro_rules! print {
-    ($($t:tt)*) => {
-        interrupt::free(
-            |cs| {
-                if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
-                    let _ = ufmt::uwrite!(console, $($t)*);
-                }
-            },
-        )
-    };
-}
-
-macro_rules! println {
-    ($($t:tt)*) => {
-        interrupt::free(
-            |cs| {
-                if let Some(console) = CONSOLE.borrow(cs).borrow_mut().as_mut() {
-                    let _ = ufmt::uwriteln!(console, $($t)*);
-                }
-            },
-        )
-    };
-}
-
-fn put_console(console: Console) {
-    interrupt::free(|cs| {
-        *CONSOLE.borrow(cs).borrow_mut() = Some(console);
-    })
-}
 
 #[avr_device::interrupt(atmega328p)]
 fn INT0() {
@@ -98,7 +67,7 @@ fn main() -> ! {
 
 
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
-    put_console(serial);
+    console::set_console(serial);
 
     let mut led = pins.d13.into_output();
 
@@ -113,9 +82,9 @@ fn main() -> ! {
     let a5 = pins.a5.into_analog_input(&mut adc);
 
     // d0 and d1 are RX and TX
-    let d2 = pins.d2.into_floating_input().downgrade();
+    let d2 = pins.d2.into_floating_input();
     let d3 = pins.d3.into_floating_input();
-    let d4 = pins.d4.into_floating_input().downgrade();
+    let d4 = pins.d4.into_floating_input();
     let d5 = pins.d5.into_floating_input();
     let d6 = pins.d6.into_floating_input();
     let d7 = pins.d7.into_floating_input();
@@ -127,14 +96,14 @@ fn main() -> ! {
 
     interrupt::free(|cs| {
         *DEVICE.borrow(cs).borrow_mut() = Some(Device{
-            left_wheel : Wheel{counter : 0, counter_pin : d2},
-            right_wheel : Wheel{counter: 0, counter_pin : d4},
+            left_wheel : Wheel{counter : 0, counter_pin : d2.downgrade()},
+            right_wheel : Wheel{counter: 0, counter_pin : d4.downgrade()},
         });
     });
     unsafe { avr_device::interrupt::enable() };
 
     loop {
-        println!("" );
+        console::println!("");
         let values = [
             a0.analog_read(&mut adc),
             a1.analog_read(&mut adc),
@@ -145,9 +114,9 @@ fn main() -> ! {
         ];
 
         for (i, v) in values.iter().enumerate() {
-            print!("A{}: {}\t", i, v);
+            console::print!("A{}: {}\t", i, v);
         }
-        println!("" );
+        console::println!("");
 
 
         let dvalues = interrupt::free(|cs| {
@@ -170,9 +139,9 @@ fn main() -> ! {
         });
 
         for (i, v) in dvalues.iter().enumerate() {
-            print!("D{}: {}\t", i+2, v);
+            console::print!("D{}: {}\t", i+2, v);
         }
-        println!("");
+        console::println!("");
 
         let (vbg, gnd, tmp, adc6, adc7) = (
             adc.read_blocking(&channel::Vbg),
@@ -181,14 +150,14 @@ fn main() -> ! {
             adc.read_blocking(&channel::ADC6),
             adc.read_blocking(&channel::ADC7),
         );
-        println!("ADC6: {}, ADC7: {}", adc6, adc7);
+        console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
 
 
-        println!("Vbandgap: {}", vbg);
-        println!("Ground: {}", gnd);
-        println!("Temperature: {}", tmp);
+        console::println!("Vbandgap: {}", vbg);
+        console::println!("Ground: {}", gnd);
+        console::println!("Temperature: {}", tmp);
         unsafe {
-            println!("Counters left: {}, right: {}", LEFT_COUNTER, RIGHT_COUNTER);
+            console::println!("Counters left: {}, right: {}", LEFT_COUNTER, RIGHT_COUNTER);
         }
         led.set_low();
         arduino_hal::delay_ms(300);
