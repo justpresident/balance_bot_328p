@@ -26,25 +26,46 @@ pub struct Device {
 impl Device {
 }
 
-static mut LEFT_COUNTER: i32 = 0;
-static mut RIGHT_COUNTER: i32 = 0;
 static DEVICE: interrupt::Mutex<RefCell<Option<Device>>> = interrupt::Mutex::new(RefCell::new(None));
 
+macro_rules! with_device {
+    ($a:ident, $t:block) => {
+        {
+            interrupt::free(|cs| {
+                let dev_ref = DEVICE.borrow(cs).borrow();
+                let &$a = &dev_ref.as_ref().unwrap();
+                {
+                    $t
+                }
+            })
+        }
+    }
+}
+macro_rules! device {
+    ($($t:tt)*) => {
+        interrupt::free(|cs| {
+            DEVICE.borrow(cs).borrow().as_ref().unwrap().$($t)*
+        })
+    }
+}
+macro_rules! device_mut {
+    ($($t:tt)*) => {
+        interrupt::free(|cs| {
+            DEVICE.borrow(cs).borrow_mut().as_mut().unwrap().$($t)*
+        })
+    }
+}
 
 #[avr_device::interrupt(atmega328p)]
 fn INT0() {
-    unsafe {
-        LEFT_COUNTER += 1;
-    }
+    device_mut!(left_wheel.counter += 1);
 }
 
 
 //This function is called on change of pin 2
 #[avr_device::interrupt(atmega328p)]
 fn PCINT2() {
-    unsafe {
-        RIGHT_COUNTER += 1;
-    }
+    device_mut!(right_wheel.counter += 1);
 }
 
 #[arduino_hal::entry]
@@ -118,25 +139,22 @@ fn main() -> ! {
         }
         console::println!("");
 
-
-        let dvalues = interrupt::free(|cs| {
-            let dev_binding = DEVICE.borrow(cs).borrow();
-            let &dev = &dev_binding.as_ref().unwrap();
-
-            [
-                dev.left_wheel.counter_pin.is_high(),
-                d3.is_high(),
-                dev.right_wheel.counter_pin.is_high(),
-                d5.is_high(),
-                d6.is_high(),
-                d7.is_high(),
-                d8.is_high(),
-                d9.is_high(),
-                d10.is_high(),
-                d11.is_high(),
-                d12.is_high(),
-            ]
+        let (d2_state, d4_state) = with_device!(dev, {
+            (dev.left_wheel.counter_pin.is_high(), dev.right_wheel.counter_pin.is_high())
         });
+        let dvalues = [
+            d2_state,
+            d3.is_high(),
+            d4_state,
+            d5.is_high(),
+            d6.is_high(),
+            d7.is_high(),
+            d8.is_high(),
+            d9.is_high(),
+            d10.is_high(),
+            d11.is_high(),
+            d12.is_high(),
+        ];
 
         for (i, v) in dvalues.iter().enumerate() {
             console::print!("D{}: {}\t", i+2, v);
@@ -156,14 +174,13 @@ fn main() -> ! {
         console::println!("Vbandgap: {}", vbg);
         console::println!("Ground: {}", gnd);
         console::println!("Temperature: {}", tmp);
-        unsafe {
-            console::println!("Counters left: {}, right: {}", LEFT_COUNTER, RIGHT_COUNTER);
-        }
+        console::println!("Counters left: {}, right: {}", device!{left_wheel.counter}, device!{right_wheel.counter});
         led.set_low();
         arduino_hal::delay_ms(300);
         led.set_high();
     }
 }
+
 
 #[cfg(not(doc))]
 #[panic_handler]
