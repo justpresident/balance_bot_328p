@@ -1,0 +1,22 @@
+#!/bin/bash
+
+set -ex
+
+if [[ !$RAVEDUDE_PORT ]]; then
+    for d in ttyUSB0 ttyUSB1; do
+        if [[ -e /dev/$d ]]; then
+            export RAVEDUDE_PORT=/dev/$d
+        fi
+    done
+fi
+if [[ ! $RAVEDUDE_PORT ]]; then
+    echo "Can't detect port"
+    exit 1
+fi
+
+if [[ $1 == "flash" ]]; then
+    cargo run
+else
+    ravedude nano-new -cb 57600 $@
+fi
+
