@@ -9,14 +9,14 @@ use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
 use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use arduino_hal::adc::channel;
 use avr_device::interrupt;
-use drivetrain::{Wheel, TB6612};
+use console::println;
+use drivetrain::{Drivetrain, Wheel, TB6612};
 
 mod console;
 mod drivetrain;
 
 pub struct Device {
-    pub left_wheel: Wheel<TB6612<Timer1Pwm,PB2>>,
-    pub right_wheel: Wheel<TB6612<Timer1Pwm,PB1>>,
+    pub drivetrain: Drivetrain<TB6612<Timer1Pwm,PB2>, TB6612<Timer1Pwm,PB1>>,
 }
 
 impl Device {
@@ -30,9 +30,7 @@ macro_rules! with_device {
             interrupt::free(|cs| {
                 let dev_ref = DEVICE.borrow(cs).borrow();
                 let &$a = &dev_ref.as_ref().unwrap();
-                {
-                    $t
-                }
+                $t
             })
         }
     }
@@ -54,14 +52,14 @@ macro_rules! device_mut {
 
 #[interrupt(atmega328p)]
 fn INT0() {
-    device_mut!(left_wheel.counter += 1);
+    device_mut!(drivetrain.left_wheel.counter += 1);
 }
 
 
 //This function is called on change of pin 2
 #[interrupt(atmega328p)]
 fn PCINT2() {
-    device_mut!(right_wheel.counter += 1);
+    device_mut!(drivetrain.right_wheel.counter += 1);
 }
 
 #[arduino_hal::entry]
@@ -92,8 +90,6 @@ fn main() -> ! {
 
 
     let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
-
-
     let a0 = pins.a0.into_analog_input(&mut adc);
     let a1 = pins.a1.into_analog_input(&mut adc);
     let a2 = pins.a2.into_analog_input(&mut adc);
@@ -101,18 +97,19 @@ fn main() -> ! {
     let a4 = pins.a4.into_analog_input(&mut adc);
     let a5 = pins.a5.into_analog_input(&mut adc);
 
+
     let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
     // d0 and d1 are RX and TX
     let d2 = pins.d2.into_floating_input().downgrade();
-    let d3 = pins.d3.into_floating_input();
+    let _d3 = pins.d3.into_floating_input();
     let d4 = pins.d4.into_floating_input().downgrade();
-    let d5 = pins.d5.into_floating_input();
+    let _d5 = pins.d5.into_floating_input();
     let d6 = pins.d6.into_output().downgrade();
     let d7 = pins.d7.into_output().downgrade();
     let mut d8 = pins.d8.into_output().downgrade();
     let mut d9 = pins.d9.into_output().into_pwm(&timer1);
     let mut d10 = pins.d10.into_output().into_pwm(&timer1);
-    let d11 = pins.d11.into_floating_input();
+    let _d11 = pins.d11.into_floating_input();
     let d12 = pins.d12.into_output().downgrade();
     let d13 = pins.d13.into_output().downgrade();
 
@@ -125,22 +122,24 @@ fn main() -> ! {
 
     interrupt::free(|cs| {
         *DEVICE.borrow(cs).borrow_mut() = Some(Device{
-            left_wheel : Wheel{
-                counter : 0,
-                counter_pin : d2,
-                motor: TB6612 {
-                    pin_a: d12,
-                    pin_b: d13,
-                    pin_pwm: d10,
+            drivetrain: Drivetrain {
+                left_wheel : Wheel{
+                    counter : 0,
+                    counter_pin : d2,
+                    motor: TB6612 {
+                        pin_a: d12,
+                        pin_b: d13,
+                        pin_pwm: d10,
+                    },
                 },
-            },
-            right_wheel : Wheel{
-                counter: 0,
-                counter_pin : d4,
-                motor: TB6612 {
-                    pin_a: d7,
-                    pin_b: d6,
-                    pin_pwm: d9,
+                right_wheel : Wheel{
+                    counter: 0,
+                    counter_pin : d4,
+                    motor: TB6612 {
+                        pin_a: d7,
+                        pin_b: d6,
+                        pin_pwm: d9,
+                    },
                 },
             },
         });
@@ -163,26 +162,6 @@ fn main() -> ! {
         }
         console::println!("");
 
-        let dvalues = with_device!(dev, {[
-            dev.left_wheel.counter_pin.is_high(),
-            d3.is_high(),
-            dev.right_wheel.counter_pin.is_high(),
-            d5.is_high(),
-            dev.right_wheel.motor.pin_b.is_set_high(),
-            dev.right_wheel.motor.pin_a.is_set_high(),
-            d8.is_set_high(),
-            dev.right_wheel.motor.pin_pwm.get_duty() > 0,
-            dev.left_wheel.motor.pin_pwm.get_duty() > 0,
-            d11.is_high(),
-            dev.left_wheel.motor.pin_a.is_set_high(),
-            dev.left_wheel.motor.pin_b.is_set_high(),
-        ]});
-
-        for (i, v) in dvalues.iter().enumerate() {
-            console::print!("D{}: {}\t", i+2, v);
-        }
-        console::println!("");
-
         let (vbg, gnd, tmp, adc6, adc7) = (
             adc.read_blocking(&channel::Vbg),
             adc.read_blocking(&channel::Gnd),
@@ -191,12 +170,8 @@ fn main() -> ! {
             adc.read_blocking(&channel::ADC7),
         );
         console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
-
-
-        console::println!("Vbandgap: {}", vbg);
-        console::println!("Ground: {}", gnd);
-        console::println!("Temperature: {}", tmp);
-        console::println!("Counters left: {}, right: {}", device!{left_wheel.counter}, device!{right_wheel.counter});
+        console::println!("Vbandgap: {}, Ground: {}, Temperature: {}", vbg, gnd, tmp);
+        with_device!(dev, { println!("{}",&dev.drivetrain) });
         arduino_hal::delay_ms(300);
     }
 }
