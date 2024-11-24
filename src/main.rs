@@ -4,23 +4,19 @@
 
 use core::cell::RefCell;
 
-use arduino_hal::hal::port::Dynamic;
-use arduino_hal::port::mode::{Floating, Input};
-use arduino_hal::port::Pin;
-use arduino_hal::prelude::*;
+use arduino_hal::hal::port::{PB1, PB2};
+use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
+use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use arduino_hal::adc::channel;
 use avr_device::interrupt;
+use drivetrain::{Wheel, TB6612};
 
 mod console;
-
-pub struct Wheel {
-    pub counter: u32,
-    pub counter_pin: Pin<Input<Floating>, Dynamic>,
-}
+mod drivetrain;
 
 pub struct Device {
-    pub left_wheel: Wheel,
-    pub right_wheel: Wheel,
+    pub left_wheel: Wheel<TB6612<Timer1Pwm,PB2>>,
+    pub right_wheel: Wheel<TB6612<Timer1Pwm,PB1>>,
 }
 
 impl Device {
@@ -56,20 +52,24 @@ macro_rules! device_mut {
     }
 }
 
-#[avr_device::interrupt(atmega328p)]
+#[interrupt(atmega328p)]
 fn INT0() {
     device_mut!(left_wheel.counter += 1);
 }
 
 
 //This function is called on change of pin 2
-#[avr_device::interrupt(atmega328p)]
+#[interrupt(atmega328p)]
 fn PCINT2() {
     device_mut!(right_wheel.counter += 1);
 }
 
 #[arduino_hal::entry]
 fn main() -> ! {
+    // TODO: 
+    //  1. Move all the logic from main into methods of Device
+    //  2. Make dp and pins members of device
+    //  3. Implement display trait for all Subdevices and print them instead of raw pin values
     let dp = arduino_hal::Peripherals::take().unwrap();
     let pins = arduino_hal::pins!(dp);
 
@@ -90,7 +90,6 @@ fn main() -> ! {
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
     console::set_console(serial);
 
-    let mut led = pins.d13.into_output();
 
     let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
 
@@ -102,23 +101,48 @@ fn main() -> ! {
     let a4 = pins.a4.into_analog_input(&mut adc);
     let a5 = pins.a5.into_analog_input(&mut adc);
 
+    let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
     // d0 and d1 are RX and TX
-    let d2 = pins.d2.into_floating_input();
+    let d2 = pins.d2.into_floating_input().downgrade();
     let d3 = pins.d3.into_floating_input();
-    let d4 = pins.d4.into_floating_input();
+    let d4 = pins.d4.into_floating_input().downgrade();
     let d5 = pins.d5.into_floating_input();
-    let d6 = pins.d6.into_floating_input();
-    let d7 = pins.d7.into_floating_input();
-    let d8 = pins.d8.into_floating_input();
-    let d9 = pins.d9.into_floating_input();
-    let d10 = pins.d10.into_floating_input();
+    let d6 = pins.d6.into_output().downgrade();
+    let d7 = pins.d7.into_output().downgrade();
+    let mut d8 = pins.d8.into_output().downgrade();
+    let mut d9 = pins.d9.into_output().into_pwm(&timer1);
+    let mut d10 = pins.d10.into_output().into_pwm(&timer1);
     let d11 = pins.d11.into_floating_input();
-    let d12 = pins.d12.into_floating_input();
+    let d12 = pins.d12.into_output().downgrade();
+    let d13 = pins.d13.into_output().downgrade();
+
+    // Enable TB6612
+    d8.set_high();
+
+    // Enable pwm on pins
+    d9.enable();
+    d10.enable();
 
     interrupt::free(|cs| {
         *DEVICE.borrow(cs).borrow_mut() = Some(Device{
-            left_wheel : Wheel{counter : 0, counter_pin : d2.downgrade()},
-            right_wheel : Wheel{counter: 0, counter_pin : d4.downgrade()},
+            left_wheel : Wheel{
+                counter : 0,
+                counter_pin : d2,
+                motor: TB6612 {
+                    pin_a: d12,
+                    pin_b: d13,
+                    pin_pwm: d10,
+                },
+            },
+            right_wheel : Wheel{
+                counter: 0,
+                counter_pin : d4,
+                motor: TB6612 {
+                    pin_a: d7,
+                    pin_b: d6,
+                    pin_pwm: d9,
+                },
+            },
         });
     });
     unsafe { avr_device::interrupt::enable() };
@@ -139,22 +163,20 @@ fn main() -> ! {
         }
         console::println!("");
 
-        let (d2_state, d4_state) = with_device!(dev, {
-            (dev.left_wheel.counter_pin.is_high(), dev.right_wheel.counter_pin.is_high())
-        });
-        let dvalues = [
-            d2_state,
+        let dvalues = with_device!(dev, {[
+            dev.left_wheel.counter_pin.is_high(),
             d3.is_high(),
-            d4_state,
+            dev.right_wheel.counter_pin.is_high(),
             d5.is_high(),
-            d6.is_high(),
-            d7.is_high(),
-            d8.is_high(),
-            d9.is_high(),
-            d10.is_high(),
+            dev.right_wheel.motor.pin_b.is_set_high(),
+            dev.right_wheel.motor.pin_a.is_set_high(),
+            d8.is_set_high(),
+            dev.right_wheel.motor.pin_pwm.get_duty() > 0,
+            dev.left_wheel.motor.pin_pwm.get_duty() > 0,
             d11.is_high(),
-            d12.is_high(),
-        ];
+            dev.left_wheel.motor.pin_a.is_set_high(),
+            dev.left_wheel.motor.pin_b.is_set_high(),
+        ]});
 
         for (i, v) in dvalues.iter().enumerate() {
             console::print!("D{}: {}\t", i+2, v);
@@ -175,9 +197,7 @@ fn main() -> ! {
         console::println!("Ground: {}", gnd);
         console::println!("Temperature: {}", tmp);
         console::println!("Counters left: {}, right: {}", device!{left_wheel.counter}, device!{right_wheel.counter});
-        led.set_low();
         arduino_hal::delay_ms(300);
-        led.set_high();
     }
 }
 
