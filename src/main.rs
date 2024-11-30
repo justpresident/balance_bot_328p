@@ -9,13 +9,14 @@ use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
 use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use arduino_hal::adc::channel;
 use avr_device::interrupt;
-use console::println;
 use drivetrain::{Drivetrain, Wheel, TB6612};
-
+use mpu6050_dmp::address::Address;
+use mpu6050_dmp::sensor;
 mod console;
 mod drivetrain;
 
 pub struct Device {
+    pub gyro: sensor::Mpu6050<arduino_hal::I2c>,
     pub drivetrain: Drivetrain<TB6612<Timer1Pwm,PB2>, TB6612<Timer1Pwm,PB1>>,
 }
 
@@ -48,6 +49,42 @@ macro_rules! device_mut {
             DEVICE.borrow(cs).borrow_mut().as_mut().unwrap().$($t)*
         })
     }
+}
+
+pub struct Quaternion {
+    pub w: i32,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
+
+impl Quaternion {
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != 16 {
+            return None;
+        }
+
+        let w = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+        let x = i32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+
+        let y = i32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+
+        let z = i32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]); // as f32 / 16384.0;
+
+        console::println!("---> {} {} {} {}", w, x, y, z);
+
+        Some(Self {
+            w: w >> 14,
+            x: x >> 14,
+            y: y >> 14,
+            z: z >> 14,
+        })
+    }
+    //pub fn magnitude(&self) -> f32 {
+    //    libm::sqrt((self.w * self.w + self.x * self.x + self.y * self.y + self.z * self.z) as f64)
+    //        as f32
+    //}
 }
 
 #[interrupt(atmega328p)]
@@ -88,58 +125,52 @@ fn main() -> ! {
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
     console::set_console(serial);
 
-
     let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
     let a0 = pins.a0.into_analog_input(&mut adc);
     let a1 = pins.a1.into_analog_input(&mut adc);
     let a2 = pins.a2.into_analog_input(&mut adc);
     let a3 = pins.a3.into_analog_input(&mut adc);
-    let a4 = pins.a4.into_analog_input(&mut adc);
-    let a5 = pins.a5.into_analog_input(&mut adc);
 
 
     let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
     // d0 and d1 are RX and TX
-    let d2 = pins.d2.into_floating_input().downgrade();
     let _d3 = pins.d3.into_floating_input();
-    let d4 = pins.d4.into_floating_input().downgrade();
     let _d5 = pins.d5.into_floating_input();
-    let d6 = pins.d6.into_output().downgrade();
-    let d7 = pins.d7.into_output().downgrade();
     let mut d8 = pins.d8.into_output().downgrade();
-    let mut d9 = pins.d9.into_output().into_pwm(&timer1);
-    let mut d10 = pins.d10.into_output().into_pwm(&timer1);
     let _d11 = pins.d11.into_floating_input();
-    let d12 = pins.d12.into_output().downgrade();
-    let d13 = pins.d13.into_output().downgrade();
 
     // Enable TB6612
     d8.set_high();
 
-    // Enable pwm on pins
-    d9.enable();
-    d10.enable();
+    let i2c = arduino_hal::I2c::new(
+        dp.TWI,
+        pins.a4.into_pull_up_input(),
+        pins.a5.into_pull_up_input(),
+        50000,
+    );
+    let mut gyro = sensor::Mpu6050::new(i2c, Address::default()).unwrap();
 
     interrupt::free(|cs| {
         *DEVICE.borrow(cs).borrow_mut() = Some(Device{
+            gyro,
             drivetrain: Drivetrain {
                 left_wheel : Wheel{
                     counter : 0,
-                    counter_pin : d2,
-                    motor: TB6612 {
-                        pin_a: d12,
-                        pin_b: d13,
-                        pin_pwm: d10,
-                    },
+                    counter_pin : pins.d2.into_floating_input().downgrade(),
+                    motor: TB6612::new(
+                        pins.d12.into_output().downgrade(),
+                        pins.d13.into_output().downgrade(),
+                        pins.d10.into_output().into_pwm(&timer1),
+                    ),
                 },
                 right_wheel : Wheel{
                     counter: 0,
-                    counter_pin : d4,
-                    motor: TB6612 {
-                        pin_a: d7,
-                        pin_b: d6,
-                        pin_pwm: d9,
-                    },
+                    counter_pin : pins.d4.into_floating_input().downgrade(),
+                    motor: TB6612::new(
+                        pins.d7.into_output().downgrade(),
+                        pins.d6.into_output().downgrade(),
+                        pins.d9.into_output().into_pwm(&timer1),
+                    ),
                 },
             },
         });
@@ -147,14 +178,17 @@ fn main() -> ! {
     unsafe { avr_device::interrupt::enable() };
 
     loop {
+        let accel_val = device_mut!(gyro.accel().unwrap());
+        console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
+        let gyro_val = device_mut!(gyro.gyro().unwrap());
+        console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
+
         console::println!("");
         let values = [
             a0.analog_read(&mut adc),
             a1.analog_read(&mut adc),
             a2.analog_read(&mut adc),
             a3.analog_read(&mut adc),
-            a4.analog_read(&mut adc),
-            a5.analog_read(&mut adc),
         ];
 
         for (i, v) in values.iter().enumerate() {
@@ -171,8 +205,8 @@ fn main() -> ! {
         );
         console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
         console::println!("Vbandgap: {}, Ground: {}, Temperature: {}", vbg, gnd, tmp);
-        with_device!(dev, { println!("{}",&dev.drivetrain) });
-        arduino_hal::delay_ms(300);
+        with_device!(dev, { console::println!("{}",&dev.drivetrain) });
+        arduino_hal::delay_ms(100);
     }
 }
 

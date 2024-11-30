@@ -51,6 +51,15 @@ where Pin<PwmOutput<Timer>, PinPwm>: SetDutyCycle
     pub pin_pwm: Pin<PwmOutput<Timer>, PinPwm>,
 }
 
+impl<Timer, PinPwm> TB6612<Timer, PinPwm>
+where Pin<PwmOutput<Timer>, PinPwm>: SetDutyCycle, PinPwm: PwmPinOps<Timer>
+{
+    pub fn new(pin_a: Pin<Output, Dynamic>, pin_b: Pin<Output, Dynamic>, mut pin_pwm: Pin<PwmOutput<Timer>, PinPwm>) -> Self {
+        pin_pwm.enable();
+        Self { pin_a, pin_b, pin_pwm }
+    }
+}
+
 impl<Timer,PinPwm: PwmPinOps<Timer, Duty=u8>> uDisplay for TB6612<Timer,PinPwm> {
     fn fmt<W>(&self, f: &mut ufmt::Formatter<'_, W>) -> Result<(), W::Error>
     where
