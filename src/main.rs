@@ -51,42 +51,6 @@ macro_rules! device_mut {
     }
 }
 
-pub struct Quaternion {
-    pub w: i32,
-    pub x: i32,
-    pub y: i32,
-    pub z: i32,
-}
-
-impl Quaternion {
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != 16 {
-            return None;
-        }
-
-        let w = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-
-        let x = i32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-
-        let y = i32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-
-        let z = i32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]); // as f32 / 16384.0;
-
-        console::println!("---> {} {} {} {}", w, x, y, z);
-
-        Some(Self {
-            w: w >> 14,
-            x: x >> 14,
-            y: y >> 14,
-            z: z >> 14,
-        })
-    }
-    //pub fn magnitude(&self) -> f32 {
-    //    libm::sqrt((self.w * self.w + self.x * self.x + self.y * self.y + self.z * self.z) as f64)
-    //        as f32
-    //}
-}
-
 #[interrupt(atmega328p)]
 fn INT0() {
     device_mut!(drivetrain.left_wheel.counter += 1);
@@ -148,7 +112,7 @@ fn main() -> ! {
         pins.a5.into_pull_up_input(),
         50000,
     );
-    let mut gyro = sensor::Mpu6050::new(i2c, Address::default()).unwrap();
+    let gyro = sensor::Mpu6050::new(i2c, Address::default()).unwrap();
 
     interrupt::free(|cs| {
         *DEVICE.borrow(cs).borrow_mut() = Some(Device{
