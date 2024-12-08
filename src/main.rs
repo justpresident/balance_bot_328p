@@ -4,7 +4,9 @@
 
 use core::cell::RefCell;
 
-use arduino_hal::hal::port::{PB1, PB2};
+use arduino_hal::hal::port::{PB1, PB2, PC0, PC1, PC2};
+use arduino_hal::port::mode;
+use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
 use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use arduino_hal::adc::channel;
@@ -18,9 +20,16 @@ mod drivetrain;
 pub struct Device {
     pub gyro: sensor::Mpu6050<arduino_hal::I2c>,
     pub drivetrain: Drivetrain<TB6612<Timer1Pwm,PB2>, TB6612<Timer1Pwm,PB1>>,
+    pub leds: Leds<PC0, PC1, PC2>,
 }
 
 impl Device {
+}
+
+pub struct Leds<R,G,B> {
+    red: Pin<mode::Output, R>,
+    green: Pin<mode::Output, G>,
+    blue: Pin<mode::Output, B>,
 }
 
 static DEVICE: interrupt::Mutex<RefCell<Option<Device>>> = interrupt::Mutex::new(RefCell::new(None));
@@ -54,6 +63,7 @@ macro_rules! device_mut {
 #[interrupt(atmega328p)]
 fn INT0() {
     device_mut!(drivetrain.left_wheel.counter += 1);
+    device_mut!(leds.blue.toggle());
 }
 
 
@@ -61,6 +71,7 @@ fn INT0() {
 #[interrupt(atmega328p)]
 fn PCINT2() {
     device_mut!(drivetrain.right_wheel.counter += 1);
+    device_mut!(leds.green.toggle());
 }
 
 #[arduino_hal::entry]
@@ -90,9 +101,6 @@ fn main() -> ! {
     console::set_console(serial);
 
     let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
-    let a0 = pins.a0.into_analog_input(&mut adc);
-    let a1 = pins.a1.into_analog_input(&mut adc);
-    let a2 = pins.a2.into_analog_input(&mut adc);
     let a3 = pins.a3.into_analog_input(&mut adc);
 
 
@@ -137,8 +145,18 @@ fn main() -> ! {
                     ),
                 },
             },
+            leds: Leds {
+                red: pins.a0.into_output(),
+                green: pins.a1.into_output(),
+                blue: pins.a2.into_output(),
+            },
         });
     });
+
+    device_mut!(leds.red.set_high());
+    device_mut!(leds.green.set_high());
+    device_mut!(leds.blue.set_high());
+
     unsafe { avr_device::interrupt::enable() };
 
     loop {
@@ -149,14 +167,11 @@ fn main() -> ! {
 
         console::println!("");
         let values = [
-            a0.analog_read(&mut adc),
-            a1.analog_read(&mut adc),
-            a2.analog_read(&mut adc),
-            a3.analog_read(&mut adc),
+            [3, a3.analog_read(&mut adc)],
         ];
 
-        for (i, v) in values.iter().enumerate() {
-            console::print!("A{}: {}\t", i, v);
+        for (_i, v) in values.iter().enumerate() {
+            console::print!("A{}: {}\t", v[0], v[1]);
         }
         console::println!("");
 
