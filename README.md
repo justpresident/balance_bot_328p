@@ -1,16 +1,16 @@
 # balance_bot_328p
-=======
-Rust implementation of Self-Balancing bot with atmega328p
-==========
 
-Rust project for the _Arduino Nano New Bootloader_.
+Rust implementation of Self-Balancing bot with atmega328p.
+
+
+## *This project is not complete yet. Contributions are welcome!*
 
 ## Build Instructions
 1. Install prerequisites as described in the [`avr-hal` README] (`avr-gcc`, `avr-libc`, `avrdude`, [`ravedude`]).
 
 2. Run `cargo build` to build the firmware.
 
-3. Run `cargo run` to flash the firmware to a connected board.  If `ravedude`
+3. Run `./rave flash` to flash the firmware to a connected board.  If `ravedude`
    fails to detect your board, check its documentation at
    <https://crates.io/crates/ravedude>.
 
