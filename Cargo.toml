@@ -1,13 +1,13 @@
 cargo-features = ["edition2024"]
 [package]
-name = "atmega328p"
+name = "balance_bot_328p"
 version = "0.1.0"
 authors = ["Roman Studenikin <justpresident@gmail.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [[bin]]
-name = "atmega328p"
+name = "balance_bot_328p"
 test = false
 bench = false
 
