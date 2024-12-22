@@ -7,6 +7,7 @@ pub(crate) static CONSOLE: interrupt::Mutex<RefCell<Option<Console>>> =
 
 // Use #[macro_export] if this is moved to a separate crate:
 // https://stackoverflow.com/questions/26731243/how-do-i-use-a-macro-across-module-files
+#[allow(unused_macros)]
 macro_rules! print {
     ($($t:tt)*) => {
         interrupt::free(
@@ -18,6 +19,7 @@ macro_rules! print {
         )
     };
 }
+#[allow(unused_imports)]
 pub(crate) use print;
 
 macro_rules! println {

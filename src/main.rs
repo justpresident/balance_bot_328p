@@ -11,7 +11,7 @@ use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
 use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use arduino_hal::adc::channel;
 use avr_device::interrupt;
-use drivetrain::{Drivetrain, Wheel, TB6612};
+use drivetrain::{Drivetrain, TwoPinEncoder, Wheel, TB6612};
 use mpu6050_dmp::address::Address;
 use mpu6050_dmp::sensor;
 mod console;
@@ -19,7 +19,7 @@ mod drivetrain;
 
 pub struct Device {
     pub gyro: sensor::Mpu6050<arduino_hal::I2c>,
-    pub drivetrain: Drivetrain<TB6612<Timer1Pwm,PB2>, TB6612<Timer1Pwm,PB1>>,
+    pub drivetrain: Drivetrain<mode::Floating, TB6612<Timer1Pwm,PB2>, mode::Floating, TB6612<Timer1Pwm,PB1>>,
     pub leds: Leds<PC0, PC1, PC2>,
 }
 
@@ -34,6 +34,7 @@ pub struct Leds<R,G,B> {
 
 static DEVICE: interrupt::Mutex<RefCell<Option<Device>>> = interrupt::Mutex::new(RefCell::new(None));
 
+#[allow(unused_macros)]
 macro_rules! with_device {
     ($a:ident, $t:block) => {
         {
@@ -45,6 +46,19 @@ macro_rules! with_device {
         }
     }
 }
+#[allow(unused_macros)]
+macro_rules! with_device_mut {
+    ($a:ident, $t:block) => {
+        {
+            interrupt::free(|cs| {
+                let mut dev_ref = DEVICE.borrow(cs).borrow_mut();
+                let $a = &mut dev_ref.as_mut().unwrap();
+                $t
+            })
+        }
+    }
+}
+#[allow(unused_macros)]
 macro_rules! device {
     ($($t:tt)*) => {
         interrupt::free(|cs| {
@@ -52,6 +66,7 @@ macro_rules! device {
         })
     }
 }
+#[allow(unused_macros)]
 macro_rules! device_mut {
     ($($t:tt)*) => {
         interrupt::free(|cs| {
@@ -62,16 +77,14 @@ macro_rules! device_mut {
 
 #[interrupt(atmega328p)]
 fn INT0() {
-    device_mut!(drivetrain.left_wheel.counter += 1);
-    device_mut!(leds.blue.toggle());
+    device_mut!(drivetrain.left_wheel.encoder.tick(););
 }
 
 
-//This function is called on change of pin 2
+//This function is called on change of pin4
 #[interrupt(atmega328p)]
 fn PCINT2() {
-    device_mut!(drivetrain.right_wheel.counter += 1);
-    device_mut!(leds.green.toggle());
+    device_mut!(drivetrain.right_wheel.encoder.tick(););
 }
 
 #[arduino_hal::entry]
@@ -83,7 +96,13 @@ fn main() -> ! {
     let dp = arduino_hal::Peripherals::take().unwrap();
     let pins = arduino_hal::pins!(dp);
 
-    // Enable interrupt for the left wheel counter
+    // Enable an interrupt for the left wheel encoder
+    // We can use normal external interrupt INT0 and configure it as rising edge
+    dp.EXINT.eicra.modify(|_, w| w.isc0().bits(0x11));
+    dp.EXINT.eimsk.modify(|_, w| w.int0().set_bit());
+
+
+    // Enable interrupt for the right wheel counter
     // We can only use port level pin-change interrupt PCINT2
     // If we use it for multiple pins on a port we'd not be able to
     // know which pin triggered it
@@ -91,25 +110,18 @@ fn main() -> ! {
     // Enable pin change interrupts on PCINT20 which is pin PD4 (= d4)
     dp.EXINT.pcmsk2.write(|w| w.pcint().bits(0b10000));
 
-    // Enable interrupt for the right wheel encoder
-    // We can use normal external interrupt INT0
-    dp.EXINT.eicra.modify(|_, w| w.isc0().bits(0x01));
-    dp.EXINT.eimsk.modify(|_, w| w.int0().set_bit());
-
-
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
     console::set_console(serial);
 
     let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
-    let a3 = pins.a3.into_analog_input(&mut adc);
 
 
     let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
     // d0 and d1 are RX and TX
     let _d3 = pins.d3.into_floating_input();
-    let _d5 = pins.d5.into_floating_input();
+    //let _d5 = pins.d5.into_floating_input();
     let mut d8 = pins.d8.into_output().downgrade();
-    let _d11 = pins.d11.into_floating_input();
+    //let mut _d11 = pins.d11.into_floating_input().downgrade();
 
     // Enable TB6612
     d8.set_high();
@@ -127,8 +139,11 @@ fn main() -> ! {
             gyro,
             drivetrain: Drivetrain {
                 left_wheel : Wheel{
-                    counter : 0,
-                    counter_pin : pins.d2.into_floating_input().downgrade(),
+                    encoder: TwoPinEncoder::new(
+                        pins.d2.into_floating_input().downgrade(),
+                        pins.d5.into_floating_input().downgrade(),
+                        true,
+                    ),
                     motor: TB6612::new(
                         pins.d12.into_output().downgrade(),
                         pins.d13.into_output().downgrade(),
@@ -136,8 +151,11 @@ fn main() -> ! {
                     ),
                 },
                 right_wheel : Wheel{
-                    counter: 0,
-                    counter_pin : pins.d4.into_floating_input().downgrade(),
+                    encoder: TwoPinEncoder::new(
+                        pins.d4.into_floating_input().downgrade(),
+                        pins.a3.into_floating_input().downgrade(),
+                        false,
+                    ),
                     motor: TB6612::new(
                         pins.d7.into_output().downgrade(),
                         pins.d6.into_output().downgrade(),
@@ -165,14 +183,6 @@ fn main() -> ! {
         let gyro_val = device_mut!(gyro.gyro().unwrap());
         console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
 
-        console::println!("");
-        let values = [
-            [3, a3.analog_read(&mut adc)],
-        ];
-
-        for (_i, v) in values.iter().enumerate() {
-            console::print!("A{}: {}\t", v[0], v[1]);
-        }
         console::println!("");
 
         let (vbg, gnd, tmp, adc6, adc7) = (
