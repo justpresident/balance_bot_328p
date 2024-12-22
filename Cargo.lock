@@ -26,19 +26,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atmega328p"
-version = "0.1.0"
-dependencies = [
- "arduino-hal",
- "avr-device",
- "embedded-hal 1.0.0",
- "nb 1.1.0",
- "panic-halt",
- "proc-macro2",
- "ufmt",
-]
-
-[[package]]
 name = "avr-device"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -77,6 +64,20 @@ dependencies = [
  "rustversion",
  "ufmt",
  "unwrap-infallible",
+]
+
+[[package]]
+name = "balance_bot_328p"
+version = "0.1.0"
+dependencies = [
+ "arduino-hal",
+ "avr-device",
+ "embedded-hal 1.0.0",
+ "mpu6050-dmp",
+ "nb 1.1.0",
+ "panic-halt",
+ "proc-macro2",
+ "ufmt",
 ]
 
 [[package]]
@@ -134,6 +135,22 @@ name = "embedded-storage"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "723dce4e9f25b6e6c5f35628e144794e5b459216ed7da97b7c4b66cdb3fa82ca"
+
+[[package]]
+name = "libm"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8355be11b20d696c8f18f6cc018c4e372165b1fa8126cef092399c9951984ffa"
+
+[[package]]
+name = "mpu6050-dmp"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "380778c5ce084642a7886e509714891c5d61f1ae71494b050322f30999cb9eb3"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "libm",
+]
 
 [[package]]
 name = "nb"

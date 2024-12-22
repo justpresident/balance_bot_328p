@@ -4,26 +4,37 @@
 
 use core::cell::RefCell;
 
-use arduino_hal::hal::port::{PB1, PB2};
+use arduino_hal::hal::port::{PB1, PB2, PC0, PC1, PC2};
+use arduino_hal::port::mode;
+use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
 use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use arduino_hal::adc::channel;
 use avr_device::interrupt;
-use console::println;
-use drivetrain::{Drivetrain, Wheel, TB6612};
-
+use drivetrain::{Drivetrain, TwoPinEncoder, Wheel, TB6612};
+use mpu6050_dmp::address::Address;
+use mpu6050_dmp::sensor;
 mod console;
 mod drivetrain;
 
 pub struct Device {
-    pub drivetrain: Drivetrain<TB6612<Timer1Pwm,PB2>, TB6612<Timer1Pwm,PB1>>,
+    pub gyro: sensor::Mpu6050<arduino_hal::I2c>,
+    pub drivetrain: Drivetrain<mode::Floating, TB6612<Timer1Pwm,PB2>, mode::Floating, TB6612<Timer1Pwm,PB1>>,
+    pub leds: Leds<PC0, PC1, PC2>,
 }
 
 impl Device {
 }
 
+pub struct Leds<R,G,B> {
+    red: Pin<mode::Output, R>,
+    green: Pin<mode::Output, G>,
+    blue: Pin<mode::Output, B>,
+}
+
 static DEVICE: interrupt::Mutex<RefCell<Option<Device>>> = interrupt::Mutex::new(RefCell::new(None));
 
+#[allow(unused_macros)]
 macro_rules! with_device {
     ($a:ident, $t:block) => {
         {
@@ -35,6 +46,19 @@ macro_rules! with_device {
         }
     }
 }
+#[allow(unused_macros)]
+macro_rules! with_device_mut {
+    ($a:ident, $t:block) => {
+        {
+            interrupt::free(|cs| {
+                let mut dev_ref = DEVICE.borrow(cs).borrow_mut();
+                let $a = &mut dev_ref.as_mut().unwrap();
+                $t
+            })
+        }
+    }
+}
+#[allow(unused_macros)]
 macro_rules! device {
     ($($t:tt)*) => {
         interrupt::free(|cs| {
@@ -42,6 +66,7 @@ macro_rules! device {
         })
     }
 }
+#[allow(unused_macros)]
 macro_rules! device_mut {
     ($($t:tt)*) => {
         interrupt::free(|cs| {
@@ -52,26 +77,28 @@ macro_rules! device_mut {
 
 #[interrupt(atmega328p)]
 fn INT0() {
-    device_mut!(drivetrain.left_wheel.counter += 1);
+    device_mut!(drivetrain.left_wheel.encoder.tick(););
 }
 
 
-//This function is called on change of pin 2
+//This function is called on change of pin4
 #[interrupt(atmega328p)]
 fn PCINT2() {
-    device_mut!(drivetrain.right_wheel.counter += 1);
+    device_mut!(drivetrain.right_wheel.encoder.tick(););
 }
 
 #[arduino_hal::entry]
 fn main() -> ! {
-    // TODO: 
-    //  1. Move all the logic from main into methods of Device
-    //  2. Make dp and pins members of device
-    //  3. Implement display trait for all Subdevices and print them instead of raw pin values
     let dp = arduino_hal::Peripherals::take().unwrap();
     let pins = arduino_hal::pins!(dp);
 
-    // Enable interrupt for the left wheel counter
+    // Enable an interrupt for the left wheel encoder
+    // We can use normal external interrupt INT0 and configure it as rising edge
+    dp.EXINT.eicra.modify(|_, w| w.isc0().bits(0x11));
+    dp.EXINT.eimsk.modify(|_, w| w.int0().set_bit());
+
+
+    // Enable interrupt for the right wheel counter
     // We can only use port level pin-change interrupt PCINT2
     // If we use it for multiple pins on a port we'd not be able to
     // know which pin triggered it
@@ -79,87 +106,81 @@ fn main() -> ! {
     // Enable pin change interrupts on PCINT20 which is pin PD4 (= d4)
     dp.EXINT.pcmsk2.write(|w| w.pcint().bits(0b10000));
 
-    // Enable interrupt for the right wheel encoder
-    // We can use normal external interrupt INT0
-    dp.EXINT.eicra.modify(|_, w| w.isc0().bits(0x01));
-    dp.EXINT.eimsk.modify(|_, w| w.int0().set_bit());
-
-
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
     console::set_console(serial);
 
-
     let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
-    let a0 = pins.a0.into_analog_input(&mut adc);
-    let a1 = pins.a1.into_analog_input(&mut adc);
-    let a2 = pins.a2.into_analog_input(&mut adc);
-    let a3 = pins.a3.into_analog_input(&mut adc);
-    let a4 = pins.a4.into_analog_input(&mut adc);
-    let a5 = pins.a5.into_analog_input(&mut adc);
 
 
     let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
     // d0 and d1 are RX and TX
-    let d2 = pins.d2.into_floating_input().downgrade();
+    // d3 and d5 are for HC-SR04 distance meter
     let _d3 = pins.d3.into_floating_input();
-    let d4 = pins.d4.into_floating_input().downgrade();
-    let _d5 = pins.d5.into_floating_input();
-    let d6 = pins.d6.into_output().downgrade();
-    let d7 = pins.d7.into_output().downgrade();
+    //let _d5 = pins.d5.into_floating_input();
     let mut d8 = pins.d8.into_output().downgrade();
-    let mut d9 = pins.d9.into_output().into_pwm(&timer1);
-    let mut d10 = pins.d10.into_output().into_pwm(&timer1);
-    let _d11 = pins.d11.into_floating_input();
-    let d12 = pins.d12.into_output().downgrade();
-    let d13 = pins.d13.into_output().downgrade();
+    // d11 is for beeper output
+    let mut _d11 = pins.d11.into_floating_input().downgrade();
 
     // Enable TB6612
     d8.set_high();
 
-    // Enable pwm on pins
-    d9.enable();
-    d10.enable();
+    let i2c = arduino_hal::I2c::new(
+        dp.TWI,
+        pins.a4.into_pull_up_input(),
+        pins.a5.into_pull_up_input(),
+        50000,
+    );
+    let gyro = sensor::Mpu6050::new(i2c, Address::default()).unwrap();
 
     interrupt::free(|cs| {
         *DEVICE.borrow(cs).borrow_mut() = Some(Device{
+            gyro,
             drivetrain: Drivetrain {
                 left_wheel : Wheel{
-                    counter : 0,
-                    counter_pin : d2,
-                    motor: TB6612 {
-                        pin_a: d12,
-                        pin_b: d13,
-                        pin_pwm: d10,
-                    },
+                    encoder: TwoPinEncoder::new(
+                        pins.d2.into_floating_input().downgrade(),
+                        pins.d5.into_floating_input().downgrade(),
+                        true,
+                    ),
+                    motor: TB6612::new(
+                        pins.d12.into_output().downgrade(),
+                        pins.d13.into_output().downgrade(),
+                        pins.d10.into_output().into_pwm(&timer1),
+                    ),
                 },
                 right_wheel : Wheel{
-                    counter: 0,
-                    counter_pin : d4,
-                    motor: TB6612 {
-                        pin_a: d7,
-                        pin_b: d6,
-                        pin_pwm: d9,
-                    },
+                    encoder: TwoPinEncoder::new(
+                        pins.d4.into_floating_input().downgrade(),
+                        pins.a3.into_floating_input().downgrade(),
+                        false,
+                    ),
+                    motor: TB6612::new(
+                        pins.d7.into_output().downgrade(),
+                        pins.d6.into_output().downgrade(),
+                        pins.d9.into_output().into_pwm(&timer1),
+                    ),
                 },
+            },
+            leds: Leds {
+                red: pins.a0.into_output(),
+                green: pins.a1.into_output(),
+                blue: pins.a2.into_output(),
             },
         });
     });
+
+    device_mut!(leds.red.set_high());
+    device_mut!(leds.green.set_high());
+    device_mut!(leds.blue.set_high());
+
     unsafe { avr_device::interrupt::enable() };
 
     loop {
-        console::println!("");
-        let values = [
-            a0.analog_read(&mut adc),
-            a1.analog_read(&mut adc),
-            a2.analog_read(&mut adc),
-            a3.analog_read(&mut adc),
-            a4.analog_read(&mut adc),
-            a5.analog_read(&mut adc),
-        ];
+        let accel_val = device_mut!(gyro.accel().unwrap());
+        console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
+        let gyro_val = device_mut!(gyro.gyro().unwrap());
+        console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
 
-        for (i, v) in values.iter().enumerate() {
-            console::print!("A{}: {}\t", i, v);
-        }
         console::println!("");
 
         let (vbg, gnd, tmp, adc6, adc7) = (
@@ -171,8 +192,8 @@ fn main() -> ! {
         );
         console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
         console::println!("Vbandgap: {}, Ground: {}, Temperature: {}", vbg, gnd, tmp);
-        with_device!(dev, { println!("{}",&dev.drivetrain) });
-        arduino_hal::delay_ms(300);
+        with_device!(dev, { console::println!("{}",&dev.drivetrain) });
+        arduino_hal::delay_ms(100);
     }
 }
 

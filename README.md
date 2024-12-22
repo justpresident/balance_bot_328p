@@ -1,4 +1,6 @@
-Balancing bot with atmega328p
+# balance_bot_328p
+=======
+Rust implementation of Self-Balancing bot with atmega328p
 ==========
 
 Rust project for the _Arduino Nano New Bootloader_.
@@ -28,7 +30,3 @@ Licensed under either of
 
 at your option.
 
-## Contribution
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall
-be dual licensed as above, without any additional terms or conditions.

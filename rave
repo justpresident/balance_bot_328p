@@ -15,7 +15,8 @@ if [[ ! $RAVEDUDE_PORT ]]; then
 fi
 
 if [[ $1 == "flash" ]]; then
-    cargo run
+    shift
+    ravedude nano-new -cb 57600 $@ target/avr-atmega328p/release/balance_bot_328p.elf
 else
     ravedude nano-new -cb 57600 $@
 fi

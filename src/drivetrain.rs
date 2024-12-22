@@ -1,22 +1,30 @@
-use arduino_hal::hal::port::Dynamic;
-use arduino_hal::port::mode::{Floating, Input, Output, PwmOutput};
-use arduino_hal::port::Pin;
-use embedded_hal::pwm::SetDutyCycle;
-use arduino_hal::simple_pwm::PwmPinOps;
-use ufmt::uDisplay;
+use core::panic;
 
+use arduino_hal::hal::port::Dynamic;
+use arduino_hal::port::mode::{Input, InputMode, Output, PwmOutput};
+use arduino_hal::port::Pin;
+use arduino_hal::simple_pwm::PwmPinOps;
+use embedded_hal::pwm::SetDutyCycle;
+use ufmt::{uDisplay,derive::uDebug};
+use avr_device::interrupt;
+
+use crate::console;
+
+#[derive(uDebug)]
 pub enum Direction {
+    Free,
     Forward,
     Backwards,
+    Brakes,
 }
 
-pub struct Drivetrain<L,R>
+pub struct Drivetrain<EL, L, ER, R>
 where L:uDisplay, R:uDisplay {
-    pub left_wheel: Wheel<L>,
-    pub right_wheel: Wheel<R>,
+    pub left_wheel: Wheel<EL, L>,
+    pub right_wheel: Wheel<ER,R>,
 }
 
-impl<L: uDisplay, R:uDisplay> uDisplay for Drivetrain<L,R>
+impl<EL, L: uDisplay, ER, R:uDisplay> uDisplay for Drivetrain<EL, L, ER, R>
 {
     fn fmt<W>(&self, f: &mut ufmt::Formatter<'_, W>) -> Result<(), W::Error>
     where
@@ -25,21 +33,69 @@ impl<L: uDisplay, R:uDisplay> uDisplay for Drivetrain<L,R>
     }
 }
 
-pub struct Wheel<T> {
-    pub counter: u32,
-    pub counter_pin: Pin<Input<Floating>, Dynamic>,
-    pub motor: T,
+
+pub struct TwoPinEncoder<T> {
+    pub pin_a: Pin<Input<T>, Dynamic>,
+    pub pin_b: Pin<Input<T>, Dynamic>,
+    pub direction: Direction,
+    pub counter: i32,
+    pub inversed: bool,
 }
 
-impl<T:uDisplay> uDisplay for Wheel<T> {
+impl<T> TwoPinEncoder<T>
+where T: InputMode
+{
+    pub fn new(pin_a: Pin<Input<T>, Dynamic>, pin_b: Pin<Input<T>, Dynamic>, inversed: bool) -> Self {
+        Self { pin_a, pin_b, direction:Direction::Forward, counter: 0, inversed }
+    }
+
+    pub fn tick(&mut self) {
+        let mut b = self.pin_b.is_high();
+        let a = self.pin_a.is_high();
+        if !a {
+            return;
+        }
+
+        if self.inversed {
+            b = !b;
+        }
+
+        self.direction = match b {
+            false => {
+                self.counter += 1;
+                Direction::Forward
+            },
+            true => {
+                self.counter -= 1;
+                Direction::Backwards
+            },
+        };
+    }
+}
+
+impl<T> uDisplay for TwoPinEncoder<T> {
     fn fmt<W>(&self, f: &mut ufmt::Formatter<'_, W>) -> Result<(), W::Error>
     where
         W: ufmt::uWrite + ?Sized {
-        ufmt::uwrite!(f, "{}, counter: {}", self.motor, self.counter)
+        ufmt::uwrite!(f, "{:?}, counter={}", self.direction, self.counter)
+    }
+}
+
+pub struct Wheel<ET,T> {
+    pub encoder: TwoPinEncoder<ET>,
+    pub motor: T,
+}
+
+impl<ET,T:uDisplay> uDisplay for Wheel<ET,T> {
+    fn fmt<W>(&self, f: &mut ufmt::Formatter<'_, W>) -> Result<(), W::Error>
+    where
+        W: ufmt::uWrite + ?Sized {
+        ufmt::uwrite!(f, "{}, encoder: {}", self.motor, self.encoder)
     }
 }
 
 pub trait MotorDriver {
+    #[allow(dead_code)]
     fn control(&mut self, direction: Direction, power: u8);
 }
 
@@ -51,17 +107,26 @@ where Pin<PwmOutput<Timer>, PinPwm>: SetDutyCycle
     pub pin_pwm: Pin<PwmOutput<Timer>, PinPwm>,
 }
 
+impl<Timer, PinPwm> TB6612<Timer, PinPwm>
+where Pin<PwmOutput<Timer>, PinPwm>: SetDutyCycle, PinPwm: PwmPinOps<Timer>
+{
+    pub fn new(pin_a: Pin<Output, Dynamic>, pin_b: Pin<Output, Dynamic>, mut pin_pwm: Pin<PwmOutput<Timer>, PinPwm>) -> Self {
+        pin_pwm.enable();
+        Self { pin_a, pin_b, pin_pwm }
+    }
+}
+
 impl<Timer,PinPwm: PwmPinOps<Timer, Duty=u8>> uDisplay for TB6612<Timer,PinPwm> {
     fn fmt<W>(&self, f: &mut ufmt::Formatter<'_, W>) -> Result<(), W::Error>
     where
         W: ufmt::uWrite + ?Sized {
         let state = match (self.pin_a.is_set_high(), self.pin_b.is_set_high()) {
-            (false, false) => "Free",
-            (false, true) => "Backwards",
-            (true, false) => "Forward",
-            (true, true) => "Brakes",
+            (false, false) => Direction::Free,
+            (false, true) => Direction::Backwards,
+            (true, false) => Direction::Forward,
+            (true, true) => Direction::Brakes,
         };
-        ufmt::uwrite!(f, "{}({})", state, self.pin_pwm.get_duty())
+        ufmt::uwrite!(f, "{:?}({})", state, self.pin_pwm.get_duty())
     }
 }
 
@@ -75,6 +140,10 @@ impl<Timer, PinPwm: PwmPinOps<Timer, Duty=u8>> MotorDriver for TB6612<Timer, Pin
             Direction::Backwards => {
                 self.pin_a.set_low();
                 self.pin_b.set_high();
+            },
+            _ => {
+                console::println!("Wrong encoder direction: {:?}", direction);
+                panic!("Achtung");
             },
         }
         self.pin_pwm.set_duty_cycle_percent(power).unwrap();
