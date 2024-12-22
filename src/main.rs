@@ -89,10 +89,6 @@ fn PCINT2() {
 
 #[arduino_hal::entry]
 fn main() -> ! {
-    // TODO: 
-    //  1. Move all the logic from main into methods of Device
-    //  2. Make dp and pins members of device
-    //  3. Implement display trait for all Subdevices and print them instead of raw pin values
     let dp = arduino_hal::Peripherals::take().unwrap();
     let pins = arduino_hal::pins!(dp);
 
@@ -118,10 +114,12 @@ fn main() -> ! {
 
     let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
     // d0 and d1 are RX and TX
+    // d3 and d5 are for HC-SR04 distance meter
     let _d3 = pins.d3.into_floating_input();
     //let _d5 = pins.d5.into_floating_input();
     let mut d8 = pins.d8.into_output().downgrade();
-    //let mut _d11 = pins.d11.into_floating_input().downgrade();
+    // d11 is for beeper output
+    let mut _d11 = pins.d11.into_floating_input().downgrade();
 
     // Enable TB6612
     d8.set_high();
