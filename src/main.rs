@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(abi_avr_interrupt)]
+extern crate static_assertions as sa;
 
 use core::cell::RefCell;
 
@@ -17,6 +18,7 @@ use mpu6050_dmp::sensor;
 mod console;
 mod drivetrain;
 mod millis;
+mod control;
 
 
 // Timer0 is used for tracking time
@@ -50,6 +52,9 @@ macro_rules! with_device {
         }
     }
 }
+#[allow(unused_imports)]
+pub(crate) use with_device;
+
 #[allow(unused_macros)]
 macro_rules! with_device_mut {
     ($a:ident, $t:block) => {
@@ -62,6 +67,8 @@ macro_rules! with_device_mut {
         }
     }
 }
+#[allow(unused_imports)]
+pub(crate) use with_device_mut;
 #[allow(unused_macros)]
 macro_rules! device {
     ($($t:tt)*) => {
@@ -109,6 +116,9 @@ fn main() -> ! {
     dp.EXINT.pcicr.write(|w| w.pcie().bits(0b100) );
     // Enable pin change interrupts on PCINT20 which is pin PD4 (= d4)
     dp.EXINT.pcmsk2.write(|w| w.pcint().bits(0b10000));
+
+
+    control::init(dp.TC2);
 
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
     console::set_console(serial);

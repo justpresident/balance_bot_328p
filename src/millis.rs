@@ -20,6 +20,7 @@ pub const fn calc_overflow(clock_hz: u32, target_hz: u32, prescale: u32) -> u32 
 const PRESCALER: u32 = 64;
 //const TIMER_COUNTS: u32 = 250;
 const TIMER_COUNTS: u32 = calc_overflow(arduino_hal::DefaultClock::FREQ, THOUSAND_HZ, PRESCALER);
+sa::const_assert!(TIMER_COUNTS < 255);
 
 
 const MILLIS_INCREMENT: u32 = 1;
