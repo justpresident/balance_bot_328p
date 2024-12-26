@@ -16,7 +16,11 @@ use mpu6050_dmp::address::Address;
 use mpu6050_dmp::sensor;
 mod console;
 mod drivetrain;
+mod millis;
 
+
+// Timer0 is used for tracking time
+// Timer1 is used for PWM for TB6612
 pub struct Device {
     pub gyro: sensor::Mpu6050<arduino_hal::I2c>,
     pub drivetrain: Drivetrain<mode::Floating, TB6612<Timer1Pwm,PB2>, mode::Floating, TB6612<Timer1Pwm,PB1>>,
@@ -110,18 +114,17 @@ fn main() -> ! {
     console::set_console(serial);
 
     let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
-
-
     let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
+
     // d0 and d1 are RX and TX
     // d3 and d5 are for HC-SR04 distance meter
     let _d3 = pins.d3.into_floating_input();
     //let _d5 = pins.d5.into_floating_input();
-    let mut d8 = pins.d8.into_output().downgrade();
     // d11 is for beeper output
     let mut _d11 = pins.d11.into_floating_input().downgrade();
 
     // Enable TB6612
+    let mut d8 = pins.d8.into_output().downgrade();
     d8.set_high();
 
     let i2c = arduino_hal::I2c::new(
@@ -173,15 +176,20 @@ fn main() -> ! {
     device_mut!(leds.green.set_high());
     device_mut!(leds.blue.set_high());
 
+    millis::init(dp.TC0);
+
     unsafe { avr_device::interrupt::enable() };
 
     loop {
-        let accel_val = device_mut!(gyro.accel().unwrap());
-        console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
-        let gyro_val = device_mut!(gyro.gyro().unwrap());
-        console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
+        let loop_begin = millis::get();
+        let (accel_val, gyro_val) = with_device_mut!(dev, {
+            (dev.gyro.accel().unwrap(), dev.gyro.gyro().unwrap())
+        });
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let loop_end = millis::get();
 
-        console::println!("");
+        console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
+        console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
 
         let (vbg, gnd, tmp, adc6, adc7) = (
             adc.read_blocking(&channel::Vbg),
@@ -193,6 +201,8 @@ fn main() -> ! {
         console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
         console::println!("Vbandgap: {}, Ground: {}, Temperature: {}", vbg, gnd, tmp);
         with_device!(dev, { console::println!("{}",&dev.drivetrain) });
+        console::println!("Millis: {}, code: {}ms, print: {}ms", loop_begin, loop_end - loop_begin, millis::get() - loop_end);
+
         arduino_hal::delay_ms(100);
     }
 }
