@@ -19,6 +19,7 @@ embedded-hal = "1.0"
 avr-device = { version = "0.5.4", features = ["atmega328p"] }
 mpu6050-dmp = "0.4.0"
 static_assertions = "1.1.0"
+libm = "0.2.11"
 
 [dependencies.arduino-hal]
 git = "https://github.com/rahix/avr-hal"

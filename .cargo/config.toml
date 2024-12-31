@@ -1,5 +1,6 @@
 [build]
 target = "avr-specs/avr-atmega328p.json"
+rustflags = "-Clink-arg=-Wl,--allow-multiple-definition"
 
 [unstable]
 build-std = ["core"]

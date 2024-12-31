@@ -12,6 +12,7 @@ use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
 use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use arduino_hal::adc::channel;
 use avr_device::interrupt;
+use control::with_control_state_mut;
 use drivetrain::{Drivetrain, TwoPinEncoder, Wheel, TB6612};
 use mpu6050_dmp::address::Address;
 use mpu6050_dmp::sensor;
@@ -20,6 +21,7 @@ mod drivetrain;
 mod millis;
 mod control;
 
+use crate::control::CONTROL_STATE;
 
 // Timer0 is used for tracking time
 // Timer1 is used for PWM for TB6612
@@ -192,14 +194,18 @@ fn main() -> ! {
 
     loop {
         let loop_begin = millis::get();
-        let (accel_val, gyro_val) = with_device_mut!(dev, {
-            (dev.gyro.accel().unwrap(), dev.gyro.gyro().unwrap())
+        let last_state = with_control_state_mut!(state, {
+            state
         });
+
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let loop_end = millis::get();
 
+        let accel_val = &last_state.accel_raw;
+        let gyro_val = &last_state.gyro_raw;
         console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
         console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
+        console::println!("Angles: {} {}", (last_state.angle_raw*100.0) as i32, (last_state.angle_ax_raw*100.0) as i32);
 
         let (vbg, gnd, tmp, adc6, adc7) = (
             adc.read_blocking(&channel::Vbg),
@@ -211,7 +217,7 @@ fn main() -> ! {
         console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
         console::println!("Vbandgap: {}, Ground: {}, Temperature: {}", vbg, gnd, tmp);
         with_device!(dev, { console::println!("{}",&dev.drivetrain) });
-        console::println!("Millis: {}, code: {}ms, print: {}ms", loop_begin, loop_end - loop_begin, millis::get() - loop_end);
+        console::println!("Millis: {}, control: {}ms, print: {}ms", loop_begin, last_state.control_time, millis::get() - loop_end);
 
         arduino_hal::delay_ms(100);
     }
