@@ -205,7 +205,16 @@ fn main() -> ! {
         let gyro_val = &last_state.gyro_raw;
         console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
         console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
-        console::println!("Angles: {} {}", (last_state.angle_raw*100.0) as i32, (last_state.angle_ax_raw*100.0) as i32);
+        console::println!("Angles: {} {} {}",
+            (last_state.angle_raw*100.0) as i32,
+            (last_state.angle_ax_raw*100.0) as i32,
+            (last_state.angle_filtered*100.0) as i32,
+        );
+        console::println!("Rates: {} {} {}",
+            (last_state.gyro_rate_x_raw*100.0) as i32,
+            (last_state.gyro_rate_y_raw*100.0) as i32,
+            (last_state.gyro_rate_z_raw*100.0) as i32,
+        );
 
         let (vbg, gnd, tmp, adc6, adc7) = (
             adc.read_blocking(&channel::Vbg),

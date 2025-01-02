@@ -6,6 +6,7 @@ use mpu6050_dmp::accel::Accel;
 use mpu6050_dmp::gyro::Gyro;
 use core::mem;
 
+use crate::drivetrain::MotorDriver;
 use crate::millis;
 use crate::with_device_mut;
 use crate::DEVICE;
@@ -18,13 +19,24 @@ sa::const_assert!(TIMER_COUNTS <= 255);
 pub struct ControlState {
     pub last_millis: u32,
     pub control_time: u32,
+    // Raw sensor readings
     pub accel_raw: Accel,
     pub gyro_raw: Gyro,
+    // Angles computed from raw accelerometer readings
     pub angle_raw: f32,
     pub angle_ax_raw: f32,
+    // Gyro rates computed from raw gyro readings
+    pub gyro_rate_x_raw: f32,
+    pub gyro_rate_y_raw: f32,
+    pub gyro_rate_z_raw: f32,
+
+    kalman_filter: KalmanFilter,
+    // Filtered angle value
+    pub angle_filtered: f32,
 }
 
-pub static CONTROL_STATE: interrupt::Mutex<RefCell<mem::MaybeUninit<ControlState>>> = interrupt::Mutex::new(RefCell::new(mem::MaybeUninit::uninit()));
+pub static CONTROL_STATE: interrupt::Mutex<RefCell<mem::MaybeUninit<ControlState>>> =
+                          interrupt::Mutex::new(RefCell::new(mem::MaybeUninit::uninit()));
 
 #[allow(unused_macros)]
 macro_rules! with_control_state_mut {
@@ -61,8 +73,81 @@ pub fn init(tc2: arduino_hal::pac::TC2) {
             gyro_raw : Gyro::new(0, 0, 0),
             angle_raw: 0.0,
             angle_ax_raw: 0.0,
+            gyro_rate_x_raw: 0.0,
+            gyro_rate_y_raw: 0.0,
+            gyro_rate_z_raw: 0.0,
+            kalman_filter: KalmanFilter::new(),
+            angle_filtered: 0.0,
         })
     });
+}
+
+struct KalmanFilter {
+    q_angle: f32,
+    q_bias: f32,
+    r_measure: f32,
+    angle: f32,
+    bias: f32,
+    rate: f32,
+    p: [[f32; 2]; 2],
+}
+
+impl KalmanFilter {
+    fn new() -> Self {
+        KalmanFilter {
+            q_angle: 0.001,
+            q_bias: 0.005,
+            r_measure: 0.5,
+            angle: 0.0,
+            bias: 0.0,
+            rate: 0.0,
+            p: [[1.0, 0.0], [0.0, 1.0]],
+        }
+    }
+
+    fn get_angle(&mut self, new_angle: f32, new_rate: f32, dt: f32) -> f32 {
+        // Predict
+        self.rate = new_rate - self.bias;
+        self.angle += dt * self.rate;
+
+        self.p[0][0] += dt * (dt*self.p[1][1] - self.p[0][1] - self.p[1][0] + self.q_angle);
+        self.p[0][1] -= dt * self.p[1][1];
+        self.p[1][0] -= dt * self.p[1][1];
+        self.p[1][1] += self.q_bias * dt;
+
+        // Update
+        let s = self.p[0][0] + self.r_measure;
+        let k = [self.p[0][0] / s, self.p[1][0] / s];
+
+        let y = new_angle - self.angle;
+        self.angle += k[0] * y;
+        self.bias += k[1] * y;
+
+        let p00_temp = self.p[0][0];
+        let p01_temp = self.p[0][1];
+
+        self.p[0][0] -= k[0] * p00_temp;
+        self.p[0][1] -= k[0] * p01_temp;
+        self.p[1][0] -= k[1] * p00_temp;
+        self.p[1][1] -= k[1] * p01_temp;
+
+        self.angle
+    }
+}
+
+fn stop() {
+    with_device_mut!(dev, {
+        dev.drivetrain.left_wheel.motor.control(crate::drivetrain::Direction::Brakes, 80);
+        dev.drivetrain.right_wheel.motor.control(crate::drivetrain::Direction::Brakes, 80);
+    });
+}
+
+fn balance(_angle: f32) {
+    with_device_mut!(dev, {
+        dev.drivetrain.left_wheel.motor.control(crate::drivetrain::Direction::Free, 0);
+        dev.drivetrain.right_wheel.motor.control(crate::drivetrain::Direction::Free, 0);
+    });
+
 }
 
 #[avr_device::interrupt(atmega328p)]
@@ -75,15 +160,31 @@ fn TIMER2_COMPA() {
 
     let angle = libm::atan2f(accel_val.y().into(), accel_val.z().into()) * 57.3;
     let angle_ax = libm::atan2f(accel_val.x().into(), accel_val.z().into()) * 57.3;
+    let gyro_rate_x_raw = (gyro_val.x() as f32 - 128.1) / 131.0;
+    let gyro_rate_y_raw = gyro_val.y() as f32 / 131.0;
+    let gyro_rate_z_raw = (-1.0 * gyro_val.z() as f32) / 131.0;
 
-    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    let control_time = millis::get() - last_millis;
     with_control_state_mut!(state, {
+        let dt = last_millis - state.last_millis;
+
         state.angle_raw = angle;
         state.angle_ax_raw = angle_ax;
         state.accel_raw = accel_val;
         state.gyro_raw = gyro_val;
         state.last_millis = last_millis;
-        state.control_time = control_time;
+        state.gyro_rate_x_raw = gyro_rate_x_raw;
+        state.gyro_rate_y_raw = gyro_rate_y_raw;
+        state.gyro_rate_z_raw = gyro_rate_z_raw;
+
+        state.angle_filtered = state.kalman_filter.get_angle(state.angle_raw, state.gyro_rate_x_raw, dt as f32);
+        if state.angle_filtered < -30.0 || state.angle_filtered > 30.0 {
+            stop();
+        } else {
+            balance(state.angle_filtered);
+        }
+
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+
+        state.control_time = millis::get() - last_millis;
     });
 }

@@ -1,4 +1,3 @@
-use core::panic;
 
 use arduino_hal::hal::port::Dynamic;
 use arduino_hal::port::mode::{Input, InputMode, Output, PwmOutput};
@@ -6,9 +5,7 @@ use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::PwmPinOps;
 use embedded_hal::pwm::SetDutyCycle;
 use ufmt::{uDisplay,derive::uDebug};
-use avr_device::interrupt;
 
-use crate::console;
 
 #[derive(uDebug)]
 pub enum Direction {
@@ -133,6 +130,10 @@ impl<Timer,PinPwm: PwmPinOps<Timer, Duty=u8>> uDisplay for TB6612<Timer,PinPwm> 
 impl<Timer, PinPwm: PwmPinOps<Timer, Duty=u8>> MotorDriver for TB6612<Timer, PinPwm> {
     fn control(&mut self, direction: Direction, power: u8) {
         match direction {
+            Direction::Free => {
+                self.pin_a.set_low();
+                self.pin_b.set_low();
+            },
             Direction::Forward => {
                 self.pin_a.set_high();
                 self.pin_b.set_low();
@@ -141,10 +142,10 @@ impl<Timer, PinPwm: PwmPinOps<Timer, Duty=u8>> MotorDriver for TB6612<Timer, Pin
                 self.pin_a.set_low();
                 self.pin_b.set_high();
             },
-            _ => {
-                console::println!("Wrong encoder direction: {:?}", direction);
-                panic!("Achtung");
-            },
+            Direction::Brakes => {
+                self.pin_a.set_high();
+                self.pin_b.set_high();
+            }
         }
         self.pin_pwm.set_duty_cycle_percent(power).unwrap();
     }

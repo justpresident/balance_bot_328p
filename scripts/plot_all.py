@@ -103,19 +103,24 @@ def main():
     LEN = 100
     LINES_NUM = 3
     LABEL_NAMES = ["X", "Y", "Z"]
+    ANGLES_NAMES = ["Angle", "Rate", "Filtered"]
     x = np.linspace(0, LEN, LEN)
     y_accel = [np.zeros((1, LEN)).flatten() for i in range(0, LINES_NUM)]
     y_gyro = [np.zeros((1, LEN)).flatten() for i in range(0, LINES_NUM)]
+    y_angles = [np.zeros((1, LEN)).flatten() for i in range(0, LINES_NUM)]
 
-    fig, (ax_accel, ax_gyro) = plt.subplots(nrows=2, sharex=True, squeeze=True)
+    fig, (ax_accel, ax_gyro, ax_angles) = plt.subplots(nrows=3, sharex=True, squeeze=True)
 
     lines_accel = []
     lines_gyro = []
+    lines_angles = []
     for i in range(0, LINES_NUM):
         lines_accel.append(ax_accel.plot(x, y_accel[i], animated=True, label="Accel_" + LABEL_NAMES[i])[0])
         lines_gyro.append(ax_gyro.plot(x, y_gyro[i], animated=True, label="Gyro_" + LABEL_NAMES[i])[0])
+        lines_angles.append(ax_angles.plot(x, y_angles[i], animated=True, label=ANGLES_NAMES[i])[0])
     ax_accel.legend(loc='lower left', ncols=LINES_NUM, fontsize='small', handletextpad=0.4)
     ax_gyro.legend(loc='lower left', ncols=LINES_NUM, fontsize='small', handletextpad=0.4)
+    ax_angles.legend(loc='lower left', ncols=LINES_NUM, fontsize='small', handletextpad=0.4)
 
     # add a frame number
     fr_number = ax_accel.annotate(
@@ -128,11 +133,13 @@ def main():
         va="top",
         animated=True,
     )
-    bm = BlitManager(fig.canvas, lines_accel + lines_gyro + [fr_number])
+    bm = BlitManager(fig.canvas, lines_accel + lines_gyro + lines_angles + [fr_number])
     ax_accel.set_title("Accel")
     ax_accel.set_ylim(-20000, 20000)
     ax_gyro.set_title("Gyro")
     ax_gyro.set_ylim(-20000, 20000)
+    ax_angles.set_title("Angles")
+    ax_angles.set_ylim(-5000, 5000)
     # make sure our window is on the screen and drawn
     plt.show(block=False)
     plt.pause(.1)
@@ -156,6 +163,9 @@ def main():
             elif line.startswith("Gyro"):
                 y_gyro[i] = np.append(y_gyro[i][1:], numbers[i])
                 lines_gyro[i].set_ydata(y_gyro[i])
+            elif line.startswith("Angles"):
+                y_angles[i] = np.append(y_angles[i][1:], numbers[i])
+                lines_angles[i].set_ydata(y_angles[i])
 
         fr_number.set_text(f"frame: {frame_num}")
 
