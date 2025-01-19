@@ -11,7 +11,7 @@ Rust implementation of Self-Balancing bot with atmega328p from AliExpress ![imag
  
   * Motors - can be controlled to rotate Forward, Backwards and Brake
  
-  * Encoders - On the stock board only 1 encoder pin is connected from each wheel, which allows to count rotations, but not direction. I also connected the second pin to allow measuring direction of rotation. But this is at expense of a pin from the distance meter. And honestly it doesn't produce high-quality signal, so I might remove that modification soon. Let me know if you need help with that.
+  * Encoders - On the stock board only 1 encoder pin is connected from each wheel, which allows to count rotations, but not direction.
 
 ### What is not implemented
 * Using kalman filter to smooth measured values for Gyroscope and Accelerometer.

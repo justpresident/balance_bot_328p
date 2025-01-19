@@ -13,7 +13,7 @@ use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use arduino_hal::adc::channel;
 use avr_device::interrupt;
 use control::with_control_state_mut;
-use drivetrain::{Drivetrain, TwoPinEncoder, Wheel, TB6612};
+use drivetrain::{Drivetrain, Encoder, OnePinEncoder, Wheel, TB6612};
 use mpu6050_dmp::address::Address;
 use mpu6050_dmp::sensor;
 mod console;
@@ -27,7 +27,7 @@ use crate::control::CONTROL_STATE;
 // Timer1 is used for PWM for TB6612
 pub struct Device {
     pub gyro: sensor::Mpu6050<arduino_hal::I2c>,
-    pub drivetrain: Drivetrain<mode::Floating, TB6612<Timer1Pwm,PB2>, mode::Floating, TB6612<Timer1Pwm,PB1>>,
+    pub drivetrain: Drivetrain<OnePinEncoder<mode::Floating>, TB6612<Timer1Pwm,PB2>, OnePinEncoder<mode::Floating>, TB6612<Timer1Pwm,PB1>>,
     pub leds: Leds<PC0, PC1, PC2>,
 }
 
@@ -152,10 +152,8 @@ fn main() -> ! {
             gyro,
             drivetrain: Drivetrain {
                 left_wheel : Wheel{
-                    encoder: TwoPinEncoder::new(
+                    encoder: OnePinEncoder::new(
                         pins.d2.into_floating_input().downgrade(),
-                        pins.d5.into_floating_input().downgrade(),
-                        true,
                     ),
                     motor: TB6612::new(
                         pins.d12.into_output().downgrade(),
@@ -164,10 +162,8 @@ fn main() -> ! {
                     ),
                 },
                 right_wheel : Wheel{
-                    encoder: TwoPinEncoder::new(
+                    encoder: OnePinEncoder::new(
                         pins.d4.into_floating_input().downgrade(),
-                        pins.a3.into_floating_input().downgrade(),
-                        false,
                     ),
                     motor: TB6612::new(
                         pins.d7.into_output().downgrade(),

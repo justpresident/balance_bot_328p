@@ -6,7 +6,6 @@ use mpu6050_dmp::accel::Accel;
 use mpu6050_dmp::gyro::Gyro;
 use core::mem;
 
-use crate::drivetrain::MotorDriver;
 use crate::millis;
 use crate::with_device_mut;
 use crate::DEVICE;
@@ -152,8 +151,8 @@ pub fn enable() {
 
 fn stop() {
     with_device_mut!(dev, {
-        dev.drivetrain.left_wheel.motor.control_raw(crate::drivetrain::Direction::Brakes, 0);
-        dev.drivetrain.right_wheel.motor.control_raw(crate::drivetrain::Direction::Brakes, 0);
+        dev.drivetrain.left_wheel.brake();
+        dev.drivetrain.right_wheel.brake();
     });
 }
 
@@ -174,8 +173,8 @@ fn balance(state: &mut ControlState) {
     let pwm_right = balance_control_output;
 
     with_device_mut!(dev, {
-        dev.drivetrain.left_wheel.motor.control(pwm_left as i16);
-        dev.drivetrain.right_wheel.motor.control(pwm_right as i16);
+        dev.drivetrain.left_wheel.control(pwm_left as i16);
+        dev.drivetrain.right_wheel.control(pwm_right as i16);
     });
 
 }
