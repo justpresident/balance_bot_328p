@@ -93,7 +93,8 @@ impl<ET,T:uDisplay> uDisplay for Wheel<ET,T> {
 
 pub trait MotorDriver {
     #[allow(dead_code)]
-    fn control(&mut self, direction: Direction, power: u8);
+    fn control_raw(&mut self, direction: Direction, power: u16);
+    fn control(&mut self, power: i16);
 }
 
 pub struct TB6612<Timer, PinPwm>
@@ -128,7 +129,18 @@ impl<Timer,PinPwm: PwmPinOps<Timer, Duty=u8>> uDisplay for TB6612<Timer,PinPwm> 
 }
 
 impl<Timer, PinPwm: PwmPinOps<Timer, Duty=u8>> MotorDriver for TB6612<Timer, PinPwm> {
-    fn control(&mut self, direction: Direction, power: u8) {
+    fn control(&mut self, power: i16) {
+        if power >= 0 {
+            self.control_raw(Direction::Backwards, power as u16);
+        } else {
+            self.control_raw(Direction::Forward, (-1*power) as u16);
+        }
+    }
+
+    fn control_raw(&mut self, direction: Direction, mut power: u16) {
+        if power > 255 {
+            power = 255;
+        }
         match direction {
             Direction::Free => {
                 self.pin_a.set_low();
@@ -147,6 +159,6 @@ impl<Timer, PinPwm: PwmPinOps<Timer, Duty=u8>> MotorDriver for TB6612<Timer, Pin
                 self.pin_b.set_high();
             }
         }
-        self.pin_pwm.set_duty_cycle_percent(power).unwrap();
+        self.pin_pwm.set_duty_cycle_fraction(power, 255).unwrap();
     }
 }

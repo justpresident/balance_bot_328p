@@ -192,6 +192,10 @@ fn main() -> ! {
 
     unsafe { avr_device::interrupt::enable() };
 
+    // Stabilize sensor readings before enabling control
+    arduino_hal::delay_ms(2000);
+    control::enable();
+
     loop {
         let loop_begin = millis::get();
         let last_state = with_control_state_mut!(state, {
@@ -201,19 +205,20 @@ fn main() -> ! {
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         let loop_end = millis::get();
 
+        with_device!(dev, { console::println!("{}",&dev.drivetrain) });
         let accel_val = &last_state.accel_raw;
         let gyro_val = &last_state.gyro_raw;
         console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
         console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
-        console::println!("Angles: {} {} {}",
-            (last_state.angle_raw*100.0) as i32,
-            (last_state.angle_ax_raw*100.0) as i32,
-            (last_state.angle_filtered*100.0) as i32,
-        );
         console::println!("Rates: {} {} {}",
             (last_state.gyro_rate_x_raw*100.0) as i32,
             (last_state.gyro_rate_y_raw*100.0) as i32,
             (last_state.gyro_rate_z_raw*100.0) as i32,
+        );
+        console::println!("Angles: {} {} {}",
+            (last_state.angle_raw*100.0) as i32,
+            (last_state.angle_ax_raw*100.0) as i32,
+            (last_state.angle_filtered*100.0) as i32,
         );
 
         let (vbg, gnd, tmp, adc6, adc7) = (
@@ -225,10 +230,9 @@ fn main() -> ! {
         );
         console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
         console::println!("Vbandgap: {}, Ground: {}, Temperature: {}", vbg, gnd, tmp);
-        with_device!(dev, { console::println!("{}",&dev.drivetrain) });
-        console::println!("Millis: {}, control: {}ms, print: {}ms", loop_begin, last_state.control_time, millis::get() - loop_end);
+        console::println!("Millis: {}, control: {}ms interval={}ms, print: {}ms", loop_begin, last_state.control_time, last_state.control_interval, millis::get() - loop_end);
 
-        arduino_hal::delay_ms(100);
+        //arduino_hal::delay_ms(100);
     }
 }
 

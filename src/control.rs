@@ -11,13 +11,18 @@ use crate::millis;
 use crate::with_device_mut;
 use crate::DEVICE;
 
+const CONTROL_INTERVAL_MS: u32 = 5;
 const PRESCALER: u32 = 1024;
-const UPDATE_FREQ: u32 = 100;
+const UPDATE_FREQ: u32 = 70;
 const TIMER_COUNTS: u32 = millis::calc_overflow(arduino_hal::DefaultClock::FREQ, UPDATE_FREQ, PRESCALER);
 sa::const_assert!(TIMER_COUNTS <= 255);
 
 pub struct ControlState {
-    pub last_millis: u32,
+    enabled: bool,
+    pub update_interval: u32,
+    pub control_interval: u32,
+    pub last_update: u32,
+    pub last_control: u32,
     pub control_time: u32,
     // Raw sensor readings
     pub accel_raw: Accel,
@@ -67,7 +72,11 @@ pub fn init(tc2: arduino_hal::pac::TC2) {
         let binding = CONTROL_STATE.borrow(cs);
         let mut state_cell = binding.borrow_mut();
         *state_cell = mem::MaybeUninit::new(ControlState{
-            last_millis: 0,
+            enabled: false,
+            update_interval: 0,
+            control_interval: 0,
+            last_update: 0,
+            last_control: 0,
             control_time: 0,
             accel_raw : Accel::new(0, 0, 0),
             gyro_raw : Gyro::new(0, 0, 0),
@@ -135,17 +144,38 @@ impl KalmanFilter {
     }
 }
 
-fn stop() {
-    with_device_mut!(dev, {
-        dev.drivetrain.left_wheel.motor.control(crate::drivetrain::Direction::Brakes, 80);
-        dev.drivetrain.right_wheel.motor.control(crate::drivetrain::Direction::Brakes, 80);
+pub fn enable() {
+    with_control_state_mut!(state, {
+        state.enabled = true;
     });
 }
 
-fn balance(_angle: f32) {
+fn stop() {
     with_device_mut!(dev, {
-        dev.drivetrain.left_wheel.motor.control(crate::drivetrain::Direction::Free, 0);
-        dev.drivetrain.right_wheel.motor.control(crate::drivetrain::Direction::Free, 0);
+        dev.drivetrain.left_wheel.motor.control_raw(crate::drivetrain::Direction::Brakes, 0);
+        dev.drivetrain.right_wheel.motor.control_raw(crate::drivetrain::Direction::Brakes, 0);
+    });
+}
+
+fn balance(state: &mut ControlState) {
+    if !state.enabled {
+        return;
+    }
+
+    let kp_balance = 55.0;
+    let kd_balance = 0.75;
+    let angle_zero = 0.0;
+    let angular_velocity_zero = 0.0;
+
+    let balance_control_output = kp_balance * (state.angle_filtered - angle_zero)
+                                + kd_balance * (state.gyro_rate_x_raw - angular_velocity_zero);
+
+    let pwm_left = balance_control_output;
+    let pwm_right = balance_control_output;
+
+    with_device_mut!(dev, {
+        dev.drivetrain.left_wheel.motor.control(pwm_left as i16);
+        dev.drivetrain.right_wheel.motor.control(pwm_right as i16);
     });
 
 }
@@ -155,7 +185,7 @@ fn TIMER2_COMPA() {
     let (accel_val, gyro_val) = with_device_mut!(dev, {
         (dev.gyro.accel().unwrap(), dev.gyro.gyro().unwrap())
     });
-    let last_millis = millis::get();
+    let cur_millis = millis::get();
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 
     let angle = libm::atan2f(accel_val.y().into(), accel_val.z().into()) * 57.3;
@@ -165,26 +195,33 @@ fn TIMER2_COMPA() {
     let gyro_rate_z_raw = (-1.0 * gyro_val.z() as f32) / 131.0;
 
     with_control_state_mut!(state, {
-        let dt = last_millis - state.last_millis;
 
         state.angle_raw = angle;
         state.angle_ax_raw = angle_ax;
         state.accel_raw = accel_val;
         state.gyro_raw = gyro_val;
-        state.last_millis = last_millis;
         state.gyro_rate_x_raw = gyro_rate_x_raw;
         state.gyro_rate_y_raw = gyro_rate_y_raw;
         state.gyro_rate_z_raw = gyro_rate_z_raw;
 
-        state.angle_filtered = state.kalman_filter.get_angle(state.angle_raw, state.gyro_rate_x_raw, dt as f32);
+
+        if cur_millis - state.last_control < CONTROL_INTERVAL_MS {
+            return;
+        }
+        let update_interval = cur_millis - state.last_update;
+        state.angle_filtered = state.kalman_filter.get_angle(state.angle_raw, state.gyro_rate_x_raw, update_interval as f32);
+
+        state.control_interval = cur_millis - state.last_control;
+        state.last_control = cur_millis;
+
         if state.angle_filtered < -30.0 || state.angle_filtered > 30.0 {
             stop();
         } else {
-            balance(state.angle_filtered);
+            balance(state);
         }
 
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 
-        state.control_time = millis::get() - last_millis;
+        state.control_time = millis::get() - cur_millis;
     });
 }
