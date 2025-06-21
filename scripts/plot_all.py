@@ -133,7 +133,19 @@ def main():
         va="top",
         animated=True,
     )
-    bm = BlitManager(fig.canvas, lines_accel + lines_gyro + lines_angles + [fr_number])
+
+    filtered_value = ax_angles.annotate(
+        '0',
+        xy=(0, 1),
+        xytext=(320, 10),
+        xycoords=('axes fraction', 'data'),
+        textcoords='offset points',
+        ha="left",
+        va="top",
+        animated=True,
+    )
+
+    bm = BlitManager(fig.canvas, lines_accel + lines_gyro + lines_angles + [fr_number, filtered_value])
     ax_accel.set_title("Accel")
     ax_accel.set_ylim(-20000, 20000)
     ax_gyro.set_title("Gyro")
@@ -168,6 +180,7 @@ def main():
                 lines_angles[i].set_ydata(y_angles[i])
 
         fr_number.set_text(f"frame: {frame_num}")
+        filtered_value.set_text(f"f.angle: {y_angles[2][-1]/100}")
 
         # tell the blitting manager to do its thing
         if bm.closed:
