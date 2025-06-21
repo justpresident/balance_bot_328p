@@ -226,7 +226,8 @@ fn main() -> ! {
         );
         console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
         console::println!("Vbandgap: {}, Ground: {}, Temperature: {}", vbg, gnd, tmp);
-        console::println!("Millis: {}, control: {}ms interval={}ms, print: {}ms", loop_begin, last_state.control_time, last_state.control_interval, millis::get() - loop_end);
+        console::println!("Control angle: {}, speed: {}", last_state.angle_control_output as i32, last_state.speed_control_output as i32);
+        console::println!("Millis: {}, control_interval={}ms, print: {}ms", loop_begin, last_state.control_interval, millis::get() - loop_end);
 
         //arduino_hal::delay_ms(100);
     }
