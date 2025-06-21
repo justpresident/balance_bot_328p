@@ -3,9 +3,10 @@ use arduino_hal::hal::port::Dynamic;
 use arduino_hal::port::mode::{Input, InputMode, Output, PwmOutput};
 use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::PwmPinOps;
-use embedded_hal::digital::InputPin;
 use embedded_hal::pwm::SetDutyCycle;
 use ufmt::{uDisplay,derive::uDebug};
+
+use crate::millis;
 
 
 #[derive(uDebug)]
@@ -64,19 +65,26 @@ impl<ET:Encoder+uDisplay,T:uDisplay> uDisplay for Wheel<ET,T> {
 pub trait Encoder{
     fn tick(&mut self);
     fn set_direction(&mut self, direction: Direction);
+    /* Return speed in ticks/s.
+    *     period_ms: minimum time period to accumulate ticks. If called earlier than period_ms from
+    *                the previous call, then old speed value might be returned
+    */
+    fn get_speed(&mut self, period_ms: u32) -> f32;
 }
 
 pub struct OnePinEncoder<T> {
     pub pin: Pin<Input<T>, Dynamic>,
     pub direction: Direction,
     pub counter: i32,
+    last_speed: f32,
+    last_speed_millis: u32,
 }
 
 impl<T> OnePinEncoder<T>
 where T: InputMode
 {
     pub fn new(pin: Pin<Input<T>, Dynamic>) -> Self {
-        Self { pin, direction:Direction::Forward, counter: 0}
+        Self { pin, direction:Direction::Forward, counter: 0, last_speed: 0.0, last_speed_millis: 0 }
     }
 }
 impl<T> Encoder for OnePinEncoder<T>
@@ -96,12 +104,23 @@ where T:InputMode
     fn set_direction(&mut self, direction: Direction) {
         self.direction = direction;
     }
+
+    fn get_speed(&mut self, period_ms: u32) -> f32 {
+        let cur_millis = millis::get();
+        if cur_millis - self.last_speed_millis < period_ms {
+            self.last_speed
+        } else {
+            self.last_speed = ((self.counter*1000) as f32)/((cur_millis - self.last_speed_millis) as f32);
+            self.last_speed_millis = cur_millis;
+            self.last_speed
+        }
+    }
 }
 impl<T> uDisplay for OnePinEncoder<T> {
     fn fmt<W>(&self, f: &mut ufmt::Formatter<'_, W>) -> Result<(), W::Error>
     where
         W: ufmt::uWrite + ?Sized {
-        ufmt::uwrite!(f, "{:?}, counter={}", self.direction, self.counter)
+        ufmt::uwrite!(f, "{:?}, counter={}, speed={}/s", self.direction, self.counter, self.last_speed as i32)
     }
 }
 
@@ -111,6 +130,8 @@ pub struct TwoPinEncoder<T> {
     pub direction: Direction,
     pub counter: i32,
     pub inversed: bool,
+    last_speed: f32,
+    last_speed_millis: u32,
 }
 
 impl<T> TwoPinEncoder<T>
@@ -118,7 +139,7 @@ where T: InputMode
 {
     #[allow(dead_code)]
     pub fn new(pin_a: Pin<Input<T>, Dynamic>, pin_b: Pin<Input<T>, Dynamic>, inversed: bool) -> Self {
-        Self { pin_a, pin_b, direction:Direction::Forward, counter: 0, inversed }
+        Self { pin_a, pin_b, direction:Direction::Forward, counter: 0, inversed, last_speed: 0.0, last_speed_millis: 0 }
     }
 }
 impl<T> Encoder for TwoPinEncoder<T>
@@ -150,13 +171,24 @@ where T: InputMode
     fn set_direction(&mut self, _direction: Direction) {
         // Encoder identifies its direction automatically
     }
+
+    fn get_speed(&mut self, period_ms: u32) -> f32 {
+        let cur_millis = millis::get();
+        if cur_millis - self.last_speed_millis < period_ms {
+            self.last_speed
+        } else {
+            self.last_speed = ((self.counter * 1000) as f32)/((cur_millis - self.last_speed_millis) as f32);
+            self.last_speed_millis = cur_millis;
+            self.last_speed
+        }
+    }
 }
 
 impl<T> uDisplay for TwoPinEncoder<T> {
     fn fmt<W>(&self, f: &mut ufmt::Formatter<'_, W>) -> Result<(), W::Error>
     where
         W: ufmt::uWrite + ?Sized {
-        ufmt::uwrite!(f, "{:?}, counter={}", self.direction, self.counter)
+        ufmt::uwrite!(f, "{:?}, counter={}, speed={}/s", self.direction, self.counter, self.last_speed as i32)
     }
 }
 
