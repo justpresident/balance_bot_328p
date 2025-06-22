@@ -15,7 +15,7 @@ Rust implementation of Self-Balancing bot with atmega328p from AliExpress ![imag
   * Controlling the balance
 
 ### What needs to be implemented
-* Tune parameters in Kalman filter and PI-PD control algorithms
+* Tune parameters in Kalman filter and PI-PD control algorithms to improve balance and reduce shaking
 * Measuring distance with built-in sensor
 * Bluetooth controls
 

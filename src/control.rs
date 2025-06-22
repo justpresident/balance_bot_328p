@@ -39,7 +39,7 @@ pub struct ControlState {
     kalman_filter: KalmanFilter,
     // Filtered angle value
     pub angle_filtered: f32,
-    pub speed_counter: f32, // speed in ticks/ms
+    pub speed_counter: i32, // speed in ticks/ms
     pub cur_speed: f32,
     pub angle_control_output: f32,
     pub speed_control_output: f32,
@@ -69,13 +69,24 @@ macro_rules! with_control_state_mut {
 #[allow(unused_imports)]
 pub(crate) use with_control_state_mut;
 
+const fn get_timer2_prescaler() -> CS2_A {
+    match PRESCALER {
+        8 => CS2_A::PRESCALE_8,
+        32 => CS2_A::PRESCALE_32,
+        64 => CS2_A::PRESCALE_64,
+        128 => CS2_A::PRESCALE_128,
+        256 => CS2_A::PRESCALE_256,
+        1024 => CS2_A::PRESCALE_1024,
+        _ => panic!(),
+    }
+}
+
 pub fn init(tc2: arduino_hal::pac::TC2) {
-    const CLOCK_SOURCE: CS2_A = CS2_A::PRESCALE_1024;
     // Configure the timer for the above interval (in CTC mode)
     // and enable its interrupt.
     tc2.tccr2a.write(|w| w.wgm2().ctc());
     tc2.ocr2a.write(|w| w.bits(TIMER_COUNTS as u8));
-    tc2.tccr2b.write(|w| w.cs2().variant(CLOCK_SOURCE));
+    tc2.tccr2b.write(|w| w.cs2().variant(get_timer2_prescaler()));
     tc2.timsk2.write(|w| w.ocie2a().set_bit());
 
     avr_device::interrupt::free(|cs| {
@@ -96,7 +107,7 @@ pub fn init(tc2: arduino_hal::pac::TC2) {
             gyro_rate_z_raw: 0.0,
             kalman_filter: KalmanFilter::new(),
             angle_filtered: 0.0,
-            speed_counter: 0.0,
+            speed_counter: 0,
             cur_speed: 0.0,
             angle_control_output: 0.0,
             speed_control_output: 0.0,
@@ -199,8 +210,8 @@ fn stop() {
 }
 
 fn update_angle_control(state: &mut ControlState, _dt: f32) {
-    const KP_BALANCE: f32 = 55.0;
-    const KD_BALANCE: f32 = 0.75;
+    const KP_BALANCE: f32 = 23.0;
+    const KD_BALANCE: f32 = 0.48;
     const ANGLE_ZERO: f32 = -0.17;
     const ANGULAR_VELOCITY_ZERO: f32 = 0.0;
 
@@ -213,21 +224,18 @@ fn update_angle_control(state: &mut ControlState, _dt: f32) {
 }
 
 fn update_speed_control(state: &mut ControlState, dt: f32) {
-    const KP_SPEED: f32 = 2.0;
-    const KI_SPEED: f32 = 0.05;
-    const MAX_INTEGRAL: f32 = 100.0; // Integral windup protection
+    const KP_SPEED: f32 = 5.52;
+    const KI_SPEED: f32 = 0.1098;
+    const MAX_INTEGRAL: f32 = 3550.0; // Integral windup protection
 
     // Low-pass filter for speed
-    state.cur_speed = state.cur_speed * 0.7 + (state.speed_counter * dt) * 0.3;
+    state.cur_speed = state.cur_speed * 0.7 + state.speed_counter as f32  * 0.3;
 
     // Update integral with windup protection
     state.speed_integral += state.cur_speed * dt;
     state.speed_integral = clamp(state.speed_integral, -MAX_INTEGRAL, MAX_INTEGRAL);
 
     state.speed_control_output = KP_SPEED * state.cur_speed + KI_SPEED * state.speed_integral;
-
-    // Clamp output
-    state.speed_control_output = clamp(state.speed_control_output, -3550.0, 3550.0)
 }
 
 fn balance(state: &mut ControlState, dt: f32) {
