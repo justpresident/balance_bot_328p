@@ -10,7 +10,6 @@ use arduino_hal::port::mode;
 use arduino_hal::port::Pin;
 use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
 use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
-use arduino_hal::adc::channel;
 use avr_device::interrupt;
 use control::with_control_state_mut;
 use drivetrain::{Drivetrain, Encoder, OnePinEncoder, Wheel, TB6612};
@@ -125,7 +124,7 @@ fn main() -> ! {
     let serial = arduino_hal::default_serial!(dp, pins, 57600);
     console::set_console(serial);
 
-    let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
+    //let adc = arduino_hal::Adc::new(dp.ADC, Default::default());
     let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
 
     // d0 and d1 are RX and TX
@@ -193,48 +192,40 @@ fn main() -> ! {
     control::enable();
 
     loop {
-        let loop_begin = millis::get();
-        let last_state = with_control_state_mut!(state, {
-            state
-        });
-
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        let loop_end = millis::get();
-
-        with_device!(dev, { console::println!("{}",&dev.drivetrain) });
-        let accel_val = &last_state.accel_raw;
-        let gyro_val = &last_state.gyro_raw;
-        console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
-        console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
-        console::println!("Rates: {} {} {}",
-            (last_state.gyro_rate_x_raw*100.0) as i32,
-            (last_state.gyro_rate_y_raw*100.0) as i32,
-            (last_state.gyro_rate_z_raw*100.0) as i32,
-        );
-        console::println!("Angles: {} {} {}",
-            (last_state.angle_raw*100.0) as i32,
-            (last_state.angle_ax_raw*100.0) as i32,
-            (last_state.angle_filtered*100.0) as i32,
-        );
-
-        let (vbg, gnd, tmp, adc6, adc7) = (
-            adc.read_blocking(&channel::Vbg),
-            adc.read_blocking(&channel::Gnd),
-            adc.read_blocking(&channel::Temperature),
-            adc.read_blocking(&channel::ADC6),
-            adc.read_blocking(&channel::ADC7),
-        );
-        console::println!("ADC6: {}, ADC7: {}", adc6, adc7);
-        console::println!("Vbandgap: {}, Ground: {}, Temperature: {}", vbg, gnd, tmp);
-        console::println!("Control angle: {}, speed: {}", last_state.angle_control_output as i32, last_state.speed_control_output as i32);
-        console::println!("Millis: {}, control_interval={}ms, print: {}ms", loop_begin, last_state.control_interval, millis::get() - loop_end);
-
-        //arduino_hal::delay_ms(100);
+        //print_debug();
     }
 }
 
+#[allow(dead_code)]
+pub fn print_debug() {
+    let loop_begin = millis::get();
+    let last_state = with_control_state_mut!(state, {
+        state
+    });
 
-#[cfg(not(doc))]
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let loop_end = millis::get();
+
+    with_device!(dev, { console::println!("{}",&dev.drivetrain) });
+    let accel_val = &last_state.accel_raw;
+    let gyro_val = &last_state.gyro_raw;
+    console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
+    console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
+    console::println!("Rates: {} {} {}",
+        (last_state.gyro_rate_x_raw*100.0) as i32,
+        (last_state.gyro_rate_y_raw*100.0) as i32,
+        (last_state.gyro_rate_z_raw*100.0) as i32,
+    );
+    console::println!("Angles: {} {} {}",
+        (last_state.angle_raw*100.0) as i32,
+        (last_state.angle_ax_raw*100.0) as i32,
+        (last_state.angle_filtered*100.0) as i32,
+    );
+
+    console::println!("Control angle: {}, speed: {}", last_state.angle_control_output as i32, last_state.speed_control_output as i32);
+    console::println!("Millis: {}, control_interval={}ms, print: {}ms", loop_begin, last_state.control_interval, millis::get() - loop_end);
+}
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // disable interrupts - firmware has panicked so no ISRs should continue running
