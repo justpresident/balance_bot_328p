@@ -1,6 +1,14 @@
 # balance_bot_328p
 
-Rust implementation of Self-Balancing bot with atmega328p from AliExpress ![image](./image.jpg)
+Rust implementation of Self-Balancing bot with atmega328p from AliExpress:
+
+## Result on the video
+[![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/JpB8rNLy2rc/0.jpg)](https://www.youtube.com/shorts/JpB8rNLy2rc) 
+
+Robot parts:
+
+<img src="./image.jpg" alt="Robot image" style="width:600px;"/>
+
 
 ## *This project is not complete yet. Contributions are welcome!*
 
