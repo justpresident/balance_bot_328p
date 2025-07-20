@@ -192,7 +192,8 @@ fn main() -> ! {
     control::enable();
 
     loop {
-        //print_debug();
+        arduino_hal::delay_ms(300);
+        print_debug();
     }
 }
 
@@ -211,19 +212,14 @@ pub fn print_debug() {
     let gyro_val = &last_state.gyro_raw;
     console::println!("Accel: {} {} {}", accel_val.x(), accel_val.y(), accel_val.z());
     console::println!("Gyro: {} {} {}", gyro_val.x(), gyro_val.y(), gyro_val.z());
-    console::println!("Rates: {} {} {}",
-        (last_state.gyro_rate_x_raw*100.0) as i32,
-        (last_state.gyro_rate_y_raw*100.0) as i32,
-        (last_state.gyro_rate_z_raw*100.0) as i32,
-    );
     console::println!("Angles: {} {} {}",
         (last_state.angle_raw*100.0) as i32,
         (last_state.angle_ax_raw*100.0) as i32,
         (last_state.angle_filtered*100.0) as i32,
     );
 
-    console::println!("Control angle: {}, speed: {}", last_state.angle_control_output as i32, last_state.speed_control_output as i32);
-    console::println!("Millis: {}, control_interval={}ms, print: {}ms", loop_begin, last_state.control_interval, millis::get() - loop_end);
+    console::println!("Control: {} {} {}", last_state.angle_control_output as i32, last_state.speed_control_output as i32, last_state.speed_integral as i32);
+    console::println!("Millis: {}, control_interval={}ms, print: {}ms", loop_begin, last_state.control_interval_ms, millis::get() - loop_end);
 }
 
 #[panic_handler]

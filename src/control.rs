@@ -21,10 +21,8 @@ sa::const_assert!(TIMER_COUNTS <= 255);
 
 pub struct ControlState {
     enabled: bool,
-    pub update_interval: u32,
-    pub control_interval: u32,
-    pub last_update: u32,
-    pub last_control: u32,
+    pub control_interval_ms: u32,
+    pub last_control_ms: u32,
     // Raw sensor readings
     pub accel_raw: Accel,
     pub gyro_raw: Gyro,
@@ -45,7 +43,7 @@ pub struct ControlState {
     pub speed_control_output: f32,
 
     // Add speed integral for proper PI control
-    speed_integral: f32,
+    pub speed_integral: f32,
     // Add previous angle for derivative calculation
     prev_angle: f32,
 }
@@ -94,10 +92,8 @@ pub fn init(tc2: arduino_hal::pac::TC2) {
         let mut state_cell = binding.borrow_mut();
         *state_cell = mem::MaybeUninit::new(ControlState{
             enabled: false,
-            update_interval: 0,
-            control_interval: 0,
-            last_update: 0,
-            last_control: 0,
+            control_interval_ms: 0,
+            last_control_ms: 0,
             accel_raw : Accel::new(0, 0, 0),
             gyro_raw : Gyro::new(0, 0, 0),
             angle_raw: 0.0,
@@ -302,13 +298,13 @@ fn TIMER2_COMPA() {
         state.speed_counter = speed_counter;
 
         // Only run control loop at specified interval
-        if cur_millis - state.last_control < CONTROL_INTERVAL_MS {
+        if cur_millis - state.last_control_ms < CONTROL_INTERVAL_MS {
             return;
         }
 
-        state.control_interval = cur_millis - state.last_control;
-        state.last_control = cur_millis;
-        let dt = (state.control_interval as f32) * 0.001;
+        state.control_interval_ms = cur_millis - state.last_control_ms;
+        state.last_control_ms = cur_millis;
+        let dt = (state.control_interval_ms as f32) * 0.001;
 
         // Update Kalman filter
         state.angle_filtered = state.kalman_filter.get_angle(state.angle_raw, state.gyro_rate_x_raw, dt);
