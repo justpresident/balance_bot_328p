@@ -220,8 +220,8 @@ fn update_angle_control(state: &mut ControlState, _dt: f32) {
 }
 
 fn update_speed_control(state: &mut ControlState, dt: f32) {
-    const KP_SPEED: f32 = 5.52;
-    const KI_SPEED: f32 = 0.1098;
+    const KP_SPEED: f32 = 7.52;
+    const KI_SPEED: f32 = 12.398;
     const MAX_INTEGRAL: f32 = 3550.0; // Integral windup protection
 
     // Low-pass filter for speed
@@ -229,6 +229,7 @@ fn update_speed_control(state: &mut ControlState, dt: f32) {
 
     // Update integral with windup protection
     state.speed_integral += state.cur_speed * dt;
+    state.speed_integral *= 0.99;
     state.speed_integral = clamp(state.speed_integral, -MAX_INTEGRAL, MAX_INTEGRAL);
 
     state.speed_control_output = KP_SPEED * state.cur_speed + KI_SPEED * state.speed_integral;
