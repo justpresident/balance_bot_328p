@@ -167,11 +167,11 @@ def main():
     frame_num = 0
     print("Setup complete, reading data...")
     for line in sys.stdin:
+        line = line.strip()
         print(line)
         frame_num += 1
         numbers = get_numbers(line)
         if len(numbers) != LINES_NUM:
-            print(" - skip\n")
             continue
 
         # update the artists

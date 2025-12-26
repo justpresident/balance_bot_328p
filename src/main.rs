@@ -12,13 +12,15 @@ use arduino_hal::simple_pwm::{IntoPwmPin, Prescaler};
 use arduino_hal::{prelude::*, simple_pwm::Timer1Pwm};
 use avr_device::interrupt;
 use control::with_control_state_mut;
+use distance::HcSr04;
 use drivetrain::{Drivetrain, Encoder, OnePinEncoder, Wheel, TB6612};
 use mpu6050_dmp::address::Address;
 use mpu6050_dmp::sensor;
 mod console;
+mod control;
+mod distance;
 mod drivetrain;
 mod millis;
-mod control;
 
 use crate::control::CONTROL_STATE;
 
@@ -27,6 +29,7 @@ use crate::control::CONTROL_STATE;
 pub struct Device {
     pub gyro: sensor::Mpu6050<arduino_hal::I2c>,
     pub drivetrain: Drivetrain<OnePinEncoder<mode::Floating>, TB6612<Timer1Pwm,PB2>, OnePinEncoder<mode::Floating>, TB6612<Timer1Pwm,PB1>>,
+    pub distance_sensor: HcSr04,
     pub leds: Leds<PC0, PC1, PC2>,
 }
 
@@ -34,9 +37,9 @@ impl Device {
 }
 
 pub struct Leds<R,G,B> {
-    red: Pin<mode::Output, R>,
-    green: Pin<mode::Output, G>,
-    blue: Pin<mode::Output, B>,
+    pub red: Pin<mode::Output, R>,
+    pub green: Pin<mode::Output, G>,
+    pub blue: Pin<mode::Output, B>,
 }
 
 static DEVICE: interrupt::Mutex<RefCell<Option<Device>>> = interrupt::Mutex::new(RefCell::new(None));
@@ -93,10 +96,31 @@ fn INT0() {
 }
 
 
-//This function is called on change of pin4
+// Track previous PIND state to detect which pin changed
+static mut PREV_PIND: u8 = 0;
+// Right wheel encoder pin mask (PD4)
+const ENCODER_RIGHT_MASK: u8 = 1 << 4;
+// HC-SR04 echo pin mask (PD5)
+const ECHO_PIN_MASK: u8 = 1 << 5;
+
+// This function is called on change of PD4 (encoder) or PD5 (echo)
 #[interrupt(atmega328p)]
 fn PCINT2() {
-    device_mut!(drivetrain.right_wheel.encoder.tick(););
+    // Read current port state
+    let pind = unsafe { (*avr_device::atmega328p::PORTD::ptr()).pind.read().bits() };
+    let prev = unsafe { PREV_PIND };
+    let changed = pind ^ prev;
+    unsafe { PREV_PIND = pind };
+
+    // Right wheel encoder
+    if (changed & ENCODER_RIGHT_MASK) != 0 {
+        device_mut!(drivetrain.right_wheel.encoder.tick(););
+    }
+
+    // HC-SR04 echo pin changed
+    if (changed & ECHO_PIN_MASK) != 0 {
+        device_mut!(distance_sensor.handle_echo_change(););
+    }
 }
 
 #[arduino_hal::entry]
@@ -110,13 +134,13 @@ fn main() -> ! {
     dp.EXINT.eimsk.modify(|_, w| w.int0().set_bit());
 
 
-    // Enable interrupt for the right wheel counter
-    // We can only use port level pin-change interrupt PCINT2
-    // If we use it for multiple pins on a port we'd not be able to
-    // know which pin triggered it
+    // Enable interrupt for the right wheel counter and echo pin
+    // We use port level pin-change interrupt PCINT2 for both
     dp.EXINT.pcicr.write(|w| w.pcie().bits(0b100) );
-    // Enable pin change interrupts on PCINT20 which is pin PD4 (= d4)
-    dp.EXINT.pcmsk2.write(|w| w.pcint().bits(0b10000));
+    // Enable pin change interrupts on:
+    // - PCINT20 (PD4 = d4) for right wheel encoder
+    // - PCINT21 (PD5 = d5) for HC-SR04 echo
+    dp.EXINT.pcmsk2.write(|w| w.pcint().bits(0b110000));
 
 
     control::init(dp.TC2);
@@ -128,9 +152,10 @@ fn main() -> ! {
     let timer1 = Timer1Pwm::new(dp.TC1, Prescaler::Prescale64);
 
     // d0 and d1 are RX and TX
-    // d3 and d5 are for HC-SR04 distance meter
-    let _d3 = pins.d3.into_floating_input();
-    //let _d5 = pins.d5.into_floating_input();
+    // d3 (trigger) and d5 (echo) are for HC-SR04 distance meter
+    let trigger_pin = pins.d3.into_output().downgrade();
+    let echo_pin = pins.d5.into_floating_input().downgrade();
+    let distance_sensor = HcSr04::new(trigger_pin, echo_pin);
     // d11 is for beeper output
     let mut _d11 = pins.d11.into_floating_input().downgrade();
 
@@ -171,6 +196,7 @@ fn main() -> ! {
                     ),
                 },
             },
+            distance_sensor,
             leds: Leds {
                 red: pins.a0.into_output(),
                 green: pins.a1.into_output(),
@@ -191,21 +217,36 @@ fn main() -> ! {
     arduino_hal::delay_ms(2000);
     control::enable();
 
+    let mut last_debug_print = millis::get();
     loop {
-        arduino_hal::delay_ms(300);
-        print_debug();
+        // Update distance sensor (non-blocking, handles its own timing)
+        // Returns Some(distance) when a new measurement is ready
+        let maybe_distance = device_mut!(distance_sensor.update());
+        if let Some(distance_cm) = maybe_distance {
+            control::set_target_speed_from_distance(distance_cm);
+        }
+
+
+        let cur_time = millis::get();
+        if  millis::get() - last_debug_print > 300 {
+            print_debug();
+            last_debug_print = cur_time;
+        }
+
+        arduino_hal::delay_ms(10);
     }
 }
 
 #[allow(dead_code)]
 pub fn print_debug() {
+
+    static mut PRINT_TIME_MS: u32 = 0;
     let loop_begin = millis::get();
     let last_state = with_control_state_mut!(state, {
         state
     });
 
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    let loop_end = millis::get();
 
     with_device!(dev, { console::println!("{}",&dev.drivetrain) });
     let accel_val = &last_state.accel_raw;
@@ -219,7 +260,21 @@ pub fn print_debug() {
     );
 
     console::println!("Control: {} {} {}", last_state.angle_control_output as i32, last_state.speed_control_output as i32, last_state.speed_integral as i32);
-    console::println!("Millis: {}, control_interval={}ms, print: {}ms", loop_begin, last_state.control_interval_ms, millis::get() - loop_end);
+
+    // Distance sensor debug info
+    console::println!("Dist: raw={}cm smooth={}cm target={}",
+        last_state.last_distance_cm,
+        last_state.smoothed_distance as i32,
+        last_state.target_speed as i32);
+
+    // SAFETY: static used in only one function in one thread
+    console::println!("Millis: {}, control_interval={}ms, print: {}ms", loop_begin, last_state.control_interval_ms, unsafe {PRINT_TIME_MS});
+    // TODO: add a fence here 
+    let loop_end = millis::get();
+    // SAFETY: static used in only one function in one thread
+    unsafe {
+        PRINT_TIME_MS = loop_end - loop_begin;
+    }
 }
 
 #[panic_handler]

@@ -15,7 +15,7 @@ use crate::DEVICE;
 const CONTROL_INTERVAL_MS: u32 = 5;
 const SPEED_CONTROL_INTERVAL_MS: u32 = 40;
 const PRESCALER: u32 = 1024;
-const UPDATE_FREQ: u32 = 70;
+const UPDATE_FREQ: u32 = 100;
 const TIMER_COUNTS: u32 = millis::calc_overflow(arduino_hal::DefaultClock::FREQ, UPDATE_FREQ, PRESCALER);
 sa::const_assert!(TIMER_COUNTS <= 255);
 
@@ -46,6 +46,19 @@ pub struct ControlState {
     pub speed_integral: f32,
     // Add previous angle for derivative calculation
     prev_angle: f32,
+
+    // Distance-based speed control
+    pub target_speed: f32,
+    pub last_distance_cm: u16,
+    pub smoothed_distance: f32,  // Exponential moving average of distance
+    // Configurable thresholds and speeds (can be tuned at runtime)
+    pub distance_close_threshold: u16,   // cm - drive backwards if closer
+    pub distance_medium_threshold: u16,  // cm - drive forwards if between close and medium
+    pub speed_backward: f32,             // target speed when too close
+    pub speed_forward: f32,              // target speed when in medium range
+
+    // Fallen state tracking - triggers reset on recovery
+    fallen: bool,
 }
 
 pub static CONTROL_STATE: interrupt::Mutex<RefCell<mem::MaybeUninit<ControlState>>> =
@@ -109,8 +122,37 @@ pub fn init(tc2: arduino_hal::pac::TC2) {
             speed_control_output: 0.0,
             speed_integral: 0.0,
             prev_angle: 0.0,
+            // Distance-based speed control defaults
+            target_speed: 0.0,
+            last_distance_cm: 0,
+            smoothed_distance: 100.0,  // Start with "far" assumption
+            distance_close_threshold: 20,   // < 20cm = backwards
+            distance_medium_threshold: 60,  // 20-60cm = forwards
+            speed_backward: -5.0,
+            speed_forward: 5.0,
+            // Fallen state
+            fallen: false,
         })
     });
+}
+
+/// Trigger a CPU reset using the watchdog timer.
+/// This performs a full hardware reset, clearing all state.
+fn software_reset() -> ! {
+    avr_device::interrupt::disable();
+
+    unsafe {
+        let wdt = &(*avr_device::atmega328p::WDT::ptr());
+        // Enable watchdog change enable (WDCE) and watchdog enable (WDE)
+        wdt.wdtcsr.write(|w| w.wdce().set_bit().wde().set_bit());
+        // Set WDE with minimum timeout (16ms), clear WDCE
+        wdt.wdtcsr.write(|w| w.wde().set_bit());
+    }
+
+    // Wait for watchdog to trigger reset
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 pub fn clamp<T: PartialOrd>(val: T, min: T, max: T) -> T {
@@ -198,6 +240,64 @@ pub fn enable() {
     });
 }
 
+/// Set target speed based on measured distance.
+/// - distance < close_threshold: drive backwards (Blue LED)
+/// - close_threshold <= distance < medium_threshold: drive forwards (Green LED)
+/// - distance >= medium_threshold: stay stationary (Red LED)
+pub fn set_target_speed_from_distance(distance_cm: u16) {
+    // EMA smoothing factor (0.0-1.0, lower = more smoothing)
+    const DISTANCE_ALPHA: f32 = 0.1;
+
+    // Determine mode and set target speed
+    let mode = with_control_state_mut!(state, {
+        state.last_distance_cm = distance_cm;
+
+        // Apply exponential moving average smoothing
+        state.smoothed_distance = DISTANCE_ALPHA * (distance_cm as f32)
+            + (1.0 - DISTANCE_ALPHA) * state.smoothed_distance;
+
+        let smoothed = state.smoothed_distance as u16;
+
+        if smoothed < state.distance_close_threshold {
+            // Too close - drive backwards
+            state.target_speed = state.speed_backward;
+            0u8 // backwards
+        } else if smoothed < state.distance_medium_threshold {
+            // Medium range - drive forwards
+            state.target_speed = state.speed_forward;
+            1u8 // forwards
+        } else {
+            // Far enough - stay stationary
+            state.target_speed = 0.0;
+            2u8 // stationary
+        }
+    });
+
+    // Set LED color based on mode (accent LED is active-low: low = on)
+    with_device_mut!(dev, {
+        match mode {
+            0 => {
+                // Backwards - Blue
+                dev.leds.red.set_high();
+                dev.leds.green.set_high();
+                dev.leds.blue.set_low();
+            }
+            1 => {
+                // Forwards - Green
+                dev.leds.red.set_high();
+                dev.leds.green.set_low();
+                dev.leds.blue.set_high();
+            }
+            _ => {
+                // Stationary - Red
+                dev.leds.red.set_low();
+                dev.leds.green.set_high();
+                dev.leds.blue.set_high();
+            }
+        }
+    });
+}
+
 fn stop() {
     with_device_mut!(dev, {
         dev.drivetrain.left_wheel.brake();
@@ -227,12 +327,15 @@ fn update_speed_control(state: &mut ControlState, dt: f32) {
     // Low-pass filter for speed
     state.cur_speed = state.cur_speed * 0.7 + state.speed_counter as f32  * 0.3;
 
+    // Speed error: difference between current speed and target speed
+    let speed_error = state.cur_speed - state.target_speed;
+
     // Update integral with windup protection
-    state.speed_integral += state.cur_speed * dt;
+    state.speed_integral += speed_error * dt;
     state.speed_integral *= 0.99;
     state.speed_integral = clamp(state.speed_integral, -MAX_INTEGRAL, MAX_INTEGRAL);
 
-    state.speed_control_output = KP_SPEED * state.cur_speed + KI_SPEED * state.speed_integral;
+    state.speed_control_output = KP_SPEED * speed_error + KI_SPEED * state.speed_integral;
 }
 
 fn balance(state: &mut ControlState, dt: f32) {
@@ -240,22 +343,33 @@ fn balance(state: &mut ControlState, dt: f32) {
         return;
     }
 
+    const FALLEN_THRESHOLD: f32 = 30.0;
+    const RECOVERY_THRESHOLD: f32 = 10.0;
+
     // Get angle control output
     update_angle_control(state, dt);
     // Get speed control output
     update_speed_control(state, dt);
 
-    // Combine angle and speed control
-    let pwm_left = state.angle_control_output - state.speed_control_output;
-    let pwm_right = state.angle_control_output - state.speed_control_output;
+    let is_fallen = state.angle_filtered < -FALLEN_THRESHOLD || state.angle_filtered > FALLEN_THRESHOLD;
+    let is_upright = state.angle_filtered > -RECOVERY_THRESHOLD && state.angle_filtered < RECOVERY_THRESHOLD;
 
-    // Safety limits - stop if angle is too extreme
-    if state.angle_filtered < -30.0 || state.angle_filtered > 30.0 {
+    if is_fallen {
+        // Robot has fallen - stop motors and mark as fallen
         stop();
-        // Reset integrators when stopped
         state.speed_integral = 0.0;
+        state.fallen = true;
+    } else if state.fallen && is_upright {
+        // Robot was fallen but is now upright - trigger full CPU reset
+        // This ensures a clean state when the robot is placed back on surface
+        stop();
+        software_reset();
     } else {
-        // Clamp PWM values to reasonable range
+        // Combine angle and speed control
+        let pwm_left = state.angle_control_output - state.speed_control_output;
+        let pwm_right = state.angle_control_output - state.speed_control_output;
+
+        // Normal operation - apply motor control
         let pwm_left = clamp(pwm_left as i16, -255, 255);
         let pwm_right = clamp(pwm_right as i16, -255, 255);
 
