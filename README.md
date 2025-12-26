@@ -87,7 +87,7 @@ cargo install ravedude
 cargo build --release
 
 # Build and flash to connected Arduino Nano
-./rave
+./rave flash
 
 # Or manually with ravedude
 ravedude nano -cb 57600 target/avr-atmega328p/release/balance_bot_328p.elf
