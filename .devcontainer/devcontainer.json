@@ -1,0 +1,36 @@
+{
+  "name": "Balance Bot ATmega328P",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:America/Los_Angeles}"
+    }
+  },
+  "runArgs": [
+    "--device=/dev/ttyUSB0"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.target": "avr-specs/avr-atmega328p.json",
+        "rust-analyzer.check.allTargets": false,
+        "rust-analyzer.checkOnSave.allTargets": false,
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      }
+    }
+  },
+  "remoteUser": "developer",
+  "mounts": [
+    "source=balance-bot-bashhistory-${devcontainerId},target=/commandhistory,type=volume"
+  ],
+  "containerEnv": {
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace"
+}
