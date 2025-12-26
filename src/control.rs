@@ -246,7 +246,7 @@ pub fn enable() {
 /// - distance >= medium_threshold: stay stationary (Red LED)
 pub fn set_target_speed_from_distance(distance_cm: u16) {
     // EMA smoothing factor (0.0-1.0, lower = more smoothing)
-    const DISTANCE_ALPHA: f32 = 0.1;
+    const DISTANCE_ALPHA: f32 = 0.25;
 
     // Determine mode and set target speed
     let mode = with_control_state_mut!(state, {
